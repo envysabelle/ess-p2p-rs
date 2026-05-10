@@ -92,14 +92,14 @@ impl Lifecycle {
     fn new(
         keypair: Keypair,
         profile: LocalProfile,
-        bridge_handle: DashboardBridgeHandle,
+        bridge_handle: Option<DashboardBridgeHandle>,
     ) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
         Self {
             phase: Arc::new(RwLock::new(LifecyclePhase::Boot)),
             keypair,
             profile,
-            bridge_handle: Some(bridge_handle),
+            bridge_handle,
             shutdown_tx,
         }
     }
@@ -115,10 +115,12 @@ impl Lifecycle {
         tracing::info!("[DEBUG] Lifecycle execute started.");
 
         let phase_signal = self.phase.clone();
-        let bridge_handle = self.bridge_handle.take().unwrap();
+        let bridge_handle_opt = self.bridge_handle.take();
 
-        // Spawn task untuk menangkap SIGTERM / Ctrl+C
-        {
+        // Spawn task untuk menangkap SIGTERM / Ctrl+C, hanya jika bridge handle tersedia.
+        // Bridge yang di-spawn di dalam bootstrap_runtime sudah memiliki mekanisme shutdown sendiri,
+        // sehingga abort manual di sini hanya relevan bila bridge dibuat di luar (sebelumnya duplikat).
+        if let Some(bridge_handle) = bridge_handle_opt {
             let phase_signal = phase_signal.clone();
             let bridge_handle_clone = bridge_handle.clone();
             let shutdown_tx = self.shutdown_tx.clone();
@@ -135,6 +137,8 @@ impl Lifecycle {
                 let _ = shutdown_tx.send(());
             });
         }
+        // Jika tidak ada bridge handle, shutdown abort tidak diperlukan; bridge di dalam runtime
+        // akan mati dengan sendirinya saat runtime berhenti.
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
@@ -760,10 +764,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .and_then(|result| result.map_err(|e| Box::new(io::Error::new(io::ErrorKind::Other, e.to_string())) as Box<dyn Error>))?;
     tracing::info!("[DEBUG] Onboarding completed for peer {}", profile.peer_id);
 
-    let db_store = DashboardStore::new();
-    let db_bridge = spawn_dashboard_bridge(db_store, DashboardBridgeConfig::default());
+    // ===================== BLOCKER FIX: Guard default secret =====================
+    if let Ok(secret) = env::var("ESS_MASTER_SECRET") {
+        let lower = secret.to_lowercase();
+        if lower.contains("change-this") || lower.contains("syndicate") {
+            tracing::error!(
+                "❌ ESS_MASTER_SECRET is still using a default or weak value! \
+                 Refusing to start. Change it in .env before launching."
+            );
+            std::process::exit(1);
+        }
+        tracing::info!("[SECURITY] Master secret strength check passed.");
+    }
+    // =============================================================================
 
-    let lifecycle = Lifecycle::new(keypair, profile, db_bridge);
+    // ✅ Bridge sudah di-spawn di dalam bootstrap_runtime(), tidak perlu di sini.
+    // Lifecycle akan berjalan tanpa DashboardBridgeHandle (None) dan hanya
+    // mengandalkan bridge yang dibuat di dalam bootstrap.
+    let lifecycle = Lifecycle::new(keypair, profile, None);
     tracing::info!("[DEBUG] Entering lifecycle execute...");
     lifecycle.execute().await
 }

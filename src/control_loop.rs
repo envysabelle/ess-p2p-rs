@@ -132,9 +132,13 @@ impl ControlLoop {
                 },
             ));
 
+            let role = self.controller.get_security()
+                .map(|s| s.current_role().as_str().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
             let health_snap = GhostHealthSnapshot {
                 node_id: local_peer_id,
-                role: "supernode".to_string(),
+                role,
                 connected_peers: conn,
                 known_peers: known,
                 route_peers: route,

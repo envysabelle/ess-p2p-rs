@@ -57,43 +57,43 @@
 │  Lifecycle: Boot → Ready → Recovery → Shutdown              │
 └────────────┬────────────────────────────────────────────────┘
              │
-     ┌───────┴──────────────────────────────────────┐
-     │              Subsystem Layer                 │
-     │                                              │
-     │  ┌──────────────┐  ┌──────────────────────┐  │
-     │  │  Identity    │  │  Authority Manager   │  │
-     │  │  (Ed25519)   │  │  (RBAC + Policy)     │  │
-     │  └──────────────┘  └──────────────────────┘  │
-     │                                              │
-     │  ┌──────────────┐  ┌──────────────────────┐  │
-     │  │  Ghost Engine│  │  Security Runtime    │  │
-     │  │  (8 states)  │  │  (Replay + Sig check)│  │
-     │  └──────────────┘  └──────────────────────┘  │
-     │                                              │
-     │  ┌──────────────┐  ┌──────────────────────┐  │
-     │  │  Governance  │  │  CRDT State Engine   │  │
-     │  │  (Voting)    │  │  + Merkle-DAG        │  │
-     │  └──────────────┘  └──────────────────────┘  │
-     └───────────────────────┬──────────────────────┘
-                             │
-             ┌───────────────┴────────────────┐
-             │         Network Layer          │
-             │  libp2p Swarm                  │
-             │  ├─ Kademlia DHT               │
-             │  ├─ Identify                   │
-             │  ├─ Ping                       │
-             │  ├─ RequestResponse            │
-             │  └─ Noise + Yamux             │
-             │                               │
-             │  Onion Routing Layer          │
-             │  (X25519 + ChaCha20-Poly1305) │
-             └───────────────────────────────┘
-                             │
-             ┌───────────────┴────────────────┐
-             │       Dashboard HTTP           │
-             │  REST API + SSE Telemetry      │
-             │  Port: ESS_DASHBOARD_BIND      │
-             └───────────────────────────────┘
+┌────────────┴─────────────────────────────────┐
+│              Subsystem Layer                 │
+│                                              │
+│  ┌──────────────┐  ┌──────────────────────┐  │
+│  │  Identity    │  │  Authority Manager   │  │
+│  │  (Ed25519)   │  │  (RBAC + Policy)     │  │
+│  └──────────────┘  └──────────────────────┘  │
+│                                              │
+│  ┌──────────────┐  ┌──────────────────────┐  │
+│  │  Ghost Engine│  │  Security Runtime    │  │
+│  │  (8 states)  │  │  (Replay + Sig check)│  │
+│  └──────────────┘  └──────────────────────┘  │
+│                                              │
+│  ┌──────────────┐  ┌──────────────────────┐  │
+│  │  Governance  │  │  CRDT State Engine   │  │
+│  │  (Voting)    │  │  + Merkle-DAG        │  │
+│  └──────────────┘  └──────────────────────┘  │
+└───────────────────────┬──────────────────────┘
+                        │
+          ┌─────────────┴──────────────────┐
+          │         Network Layer          │
+          │  libp2p Swarm                  │
+          │  ├─ Kademlia DHT               │
+          │  ├─ Identify                   │
+          │  ├─ Ping                       │
+          │  ├─ RequestResponse            │
+          │  └─ Noise + Yamux              │
+          │                               │
+          │  Onion Routing Layer          │
+          │  (X25519 + ChaCha20-Poly1305) │
+          └───────────────────────────────┘
+                        │
+          ┌─────────────┴──────────────────┐
+          │       Dashboard HTTP           │
+          │  REST API + SSE Telemetry      │
+          │  Port: ESS_DASHBOARD_BIND      │
+          └───────────────────────────────┘
 ```
 
 ### Startup Flow (`main.rs`)
@@ -285,6 +285,7 @@ bash genesis.sh
 ```
 
 `genesis.sh` performs the following steps:
+
 1. Builds the binary (`cargo build --release`)
 2. Runs the node temporarily (10–30 seconds), captures the PeerID from logs
 3. Updates `AUTHORITY_SUPERNODES` in `.env` with the detected PeerID
@@ -292,6 +293,7 @@ bash genesis.sh
 5. Starts the node permanently as the genesis supernode
 
 Save the multiaddr printed in the output — you will need it for subsequent nodes:
+
 ```
 PeerID Supernode: 12D3KooW...
 Multiaddr:        /ip4/1.2.3.4/tcp/5001/p2p/12D3KooW...
@@ -310,6 +312,7 @@ bash join.sh /ip4/1.2.3.4/tcp/5001/p2p/12D3KooW...
 ```
 
 `join.sh` will:
+
 1. Validate the multiaddr format
 2. Set `BOOTSTRAP_P2P_MULTIADDRS` in `.env`
 3. Start the node (`cargo run --release`)
@@ -340,7 +343,7 @@ Configured via `NODE_ROLE` in `.env`. Each role has distinct access rights enfor
 | `validator` | 5 | All gateway + admin update |
 | `supernode` | 6 | Full authority, can update cluster policy |
 
-**Actions checked:** `Connect`, `Route`, `GatewayAccess`, `GatewayEgress`, `WebTraffic`, `AdminUpdate`
+Actions checked: `Connect`, `Route`, `GatewayAccess`, `GatewayEgress`, `WebTraffic`, `AdminUpdate`
 
 The role is stored in `data/identity/role.txt` and bound to `EssIdentity` at startup. Role changes issued by an authority supernode are propagated via a cryptographically signed `ConfigBundle`.
 
@@ -363,28 +366,29 @@ The role is stored in `data/identity/role.txt` and bound to `EssIdentity` at sta
 
 ### Security Runtime (`security_runtime.rs`)
 
-- **Replay Detection**: Nonce-based with a timestamp window of ±N minutes
-- **Signature Verification**: Every `DirectRequest` has its Ed25519 signature verified
-- **Peer Identity Validation**: Peer public key hash is checked against the authority registry
-- **Timestamp Window Enforcement**: Requests outside the window are immediately rejected
+- **Replay Detection:** Nonce-based with a timestamp window of ±N minutes
+- **Signature Verification:** Every `DirectRequest` has its Ed25519 signature verified
+- **Peer Identity Validation:** Peer public key hash is checked against the authority registry
+- **Timestamp Window Enforcement:** Requests outside the window are immediately rejected
 
 ### Onion Routing (`onion.rs`)
 
 Each message passes through 3 hops by default:
 
-1. Sender generates an **ephemeral X25519 keypair** per hop
+1. Sender generates an ephemeral X25519 keypair per hop
 2. ECDH between ephemeral private key + recipient hop's public key → shared secret
-3. `HKDF(shared_secret)` → ChaCha20-Poly1305 key + nonce
+3. HKDF(shared_secret) → ChaCha20-Poly1305 key + nonce
 4. Payload is wrapped from outermost to innermost (multi-layer encryption)
 5. Each hop can only decrypt one layer and only knows the next hop
 
-**Additional security:**
+Additional security:
+
 - Every `HopInfo` must include an `activation_cert` — an Ed25519 signature from the authority binding the PeerID to its X25519 public key
 - In release mode: `authority_pubkey` is required to verify every hop
 
 ### Key Rotation (`id_rotation.rs`)
 
-Every 24 hours, the system rotates its internal seed using a **hash-chain forward secrecy** scheme:
+Every 24 hours, the system rotates its internal seed using a hash-chain forward secrecy scheme:
 
 ```
 epoch_0: seed = HKDF(master_secret, epoch_number)
@@ -397,7 +401,7 @@ Past seeds cannot be computed from the current seed (backward secrecy). The Peer
 
 ### Post-Quantum (`pqc.rs`)
 
-Hybrid key exchange using **ML-KEM-1024 + X25519** with HKDF:
+Hybrid key exchange using ML-KEM-1024 + X25519 with HKDF:
 
 ```
 final_key = HKDF(mlkem_shared_secret || x25519_shared_secret)
@@ -421,7 +425,7 @@ The HTTP server runs automatically on `ESS_DASHBOARD_BIND` (default: `127.0.0.1:
 | `/routes` | GET | Active routing table |
 | `/logs` | GET | Recent log events |
 | `/health` | GET | Node health check (level: healthy / degraded / critical) |
-| `/events` | GET | **SSE** live telemetry stream |
+| `/events` | GET | SSE live telemetry stream |
 
 ### Example Response `/`
 
@@ -448,9 +452,19 @@ The HTTP server runs automatically on `ESS_DASHBOARD_BIND` (default: `127.0.0.1:
 ```
 
 If `ESS_DASHBOARD_TOKEN` is set, every request must include the header:
+
 ```
 Authorization: Bearer <token>
 ```
+
+### Production Deployment with TLS
+
+1. Copy `nginx.conf` to the server and adjust the domain and SSL path.
+2. Ensure the firewall only opens port `443` (HTTPS) and the P2P port.
+3. Set the `ESS_DASHBOARD_TOKEN` environment variable with a strong token.
+4. Start the node with `bash run.sh`.
+
+The dashboard will be available at `https://dashboard.ess.example.com` with token authentication. See the reverse proxy configuration example in `nginx.conf`.
 
 ---
 
@@ -489,6 +503,7 @@ Init → Wake → Beacon → Sync → Idle → Sleep
 ### GhostBridge
 
 Communication channel between the Ghost Engine and the Network Layer:
+
 - Ghost receives events from the network (peer connect/disconnect, route changes)
 - Ghost sends commands to the network (disconnect peer, broadcast beacon)
 
@@ -511,10 +526,10 @@ A decentralized voting system among supernodes for network policy changes.
 1. A supernode creates a proposal → broadcasts to all supernodes
 2. Each supernode sends a vote (`true`/`false`) with an HMAC signature
 3. If `votes_for / total_supernodes >= quorum_ratio` → proposal is executed
-4. **Bootstrap mode**: active when supernode count < 2; a single vote is sufficient
-5. **Bootstrap deadline**: 1 hour — after this point, bootstrap mode exits automatically
+4. **Bootstrap mode:** active when supernode count < 2; a single vote is sufficient
+5. **Bootstrap deadline:** 1 hour — after this point, bootstrap mode exits automatically
 
-Proposals and votes are persisted to a sled database via `governance/store.rs`.
+Proposals and votes are persisted to a `sled` database via `governance/store.rs`.
 
 ---
 
@@ -532,7 +547,7 @@ Proposals and votes are persisted to a sled database via `governance/store.rs`.
 | `LwwMap<K,V>` | LWW per key | Peer registry |
 | `OrSet<T>` | Observed-Remove Set | Peer presence with remove support |
 
-**Merge rule**: `merge(A, B)` = the state with the most recent timestamp wins (LWW). All nodes that receive the same set of updates will converge to an identical state without central coordination.
+Merge rule: `merge(A, B)` = the state with the most recent timestamp wins (LWW). All nodes that receive the same set of updates will converge to an identical state without central coordination.
 
 ### Merkle-DAG Audit Trail (`merkle_dag.rs`)
 
@@ -556,9 +571,9 @@ The buffer is limited to 1024 nodes (circular). Used for verifying change histor
 
 New nodes must complete the onboarding process before participating fully in the network:
 
-1. **LocalProfile** is created from `ESS_NODE_NAME`, `ESS_NODE_EMAIL`, and `ESS_SERIAL_NUMBER`
+1. `LocalProfile` is created from `ESS_NODE_NAME`, `ESS_NODE_EMAIL`, and `ESS_SERIAL_NUMBER`
 2. Serial number is verified using `HMAC-SHA256(ESS_MASTER_SECRET, base_serial)`
-3. Node generates an **X25519 static keypair** (`data/identity/x25519_secret.bin`) for onion routing
+3. Node generates an X25519 static keypair (`data/identity/x25519_secret.bin`) for onion routing
 4. An `OnboardRequest` is sent to the supernode via libp2p Request-Response:
    ```
    OnboardRequest {
@@ -641,9 +656,9 @@ data/
 
 ### Networking
 
-- **Firewall**: Open `P2P_PORT` (default 5001/TCP) for inter-node traffic.
-- **`PUBLIC_IP`**: Must be set to the public IP reachable by other nodes. Automatic detection via `ipify.org` is performed by `setup.sh`.
-- **NAT Traversal**: There is currently no built-in hole punching. Use a direct public IP or a VPN overlay.
+- **Firewall:** Open `P2P_PORT` (default `5001/TCP`) for inter-node traffic.
+- **`PUBLIC_IP`:** Must be set to the public IP reachable by other nodes. Automatic detection via `ipify.org` is performed by `setup.sh`.
+- **NAT Traversal:** There is currently no built-in hole punching. Use a direct public IP or a VPN overlay.
 
 ### Performance & Stability
 
@@ -653,8 +668,8 @@ data/
 
 ### Backup
 
-- **`data/identity/ess_identity.bin`** — The node's PeerID is derived from this file. Back it up securely. If lost, the node will have a new PeerID and must re-onboard.
-- **`data/authority.bin`** — Network authority state. Back up regularly.
+- `data/identity/ess_identity.bin` — The node's PeerID is derived from this file. Back it up securely. If lost, the node will have a new PeerID and must re-onboard.
+- `data/authority.bin` — Network authority state. Back up regularly.
 
 ---
 

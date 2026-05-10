@@ -775,7 +775,11 @@ async fn handle_event(
                                         info!("[GOVERNANCE] Peer {} activated by consensus. Signers: {:?}", peer_str, signers);
                                         let ctrl = controller.clone();
                                         let target_peer = peer;
+
+                                        // ✅ Patch 4: Kirim notifikasi aktivasi langsung ke peer target
+                                        let notif_cert = cert.clone();
                                         tokio::spawn(async move {
+                                            ctrl.send_activation_notification(target_peer, notif_cert).await;
                                             ctrl.publish_verified_peer(target_peer, cert_data).await;
                                         });
                                     }
@@ -892,7 +896,7 @@ async fn handle_event(
     }
 }
 
-// == Fungsi direct request biasa (dengan binary body) ==
+// == Fungsi direct request (dengan binary body) ==
 async fn handle_direct_request(
     controller: &Arc<NetworkController>,
     security: &Arc<SecurityRuntime>,
@@ -987,7 +991,9 @@ async fn handle_direct_request(
                                     info!("[GOVERNANCE] Peer {} activated by consensus. Signers: {:?}", target, signers);
                                     let ctrl = controller.clone();
                                     if let Ok(pid) = target.parse::<PeerId>() {
+                                        let notif_cert = cert.clone();
                                         tokio::spawn(async move {
+                                            ctrl.send_activation_notification(pid, notif_cert).await;
                                             ctrl.publish_verified_peer(pid, cert_data).await;
                                         });
                                     }
@@ -1005,6 +1011,26 @@ async fn handle_direct_request(
         let mut guard = handle.lock();
         if let Some(swarm) = guard.as_mut() {
             let _ = swarm.behaviour_mut().direct.send_response(channel, ack_resp);
+        }
+        return;
+    }
+
+    // ✅ Handler untuk governance.activation_notify
+    if request.kind == "governance.activation_notify" {
+        if let Ok(cert) = bincode::deserialize::<ActivationCertificate>(body) {
+            info!("[GOVERNANCE] Received activation notification: {:?}", cert);
+            // Perbarui state lokal
+            controller.update_world_state(|ws| {
+                ws.mark_peer_activated(&cert.target);
+                // Role bisa disesuaikan sesuai kebutuhan, sementara pakai client
+                ws.set_peer_role(&cert.target, "client");
+            });
+        }
+        let ack = DirectResponse::plain_ok(&request.message_id, &local.to_string(), &peer.to_string(), "activated");
+        let handle = controller.swarm_handle();
+        let mut guard = handle.lock();
+        if let Some(swarm) = guard.as_mut() {
+            let _ = swarm.behaviour_mut().direct.send_response(channel, ack);
         }
         return;
     }

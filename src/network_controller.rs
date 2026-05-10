@@ -8,6 +8,7 @@ use crate::ghost_runtime::{GhostActionSink, GhostRuntimeHandle};
 use crate::message::DirectResponse;
 use crate::message::DirectRequest;
 use crate::governance::engine::GovernanceEngine;
+use crate::governance::messages::ActivationCertificate;   // <-- tambahan import
 use crate::network::runtime::types::{Behaviour, OnboardRequest, OnboardResponse};
 use crate::security_runtime::SecurityRuntime;
 use crate::system_event::{SystemEvent, SystemEventKind};
@@ -522,6 +523,17 @@ impl NetworkController {
         } else {
             warn!("Swarm not available for Kademlia publishing");
         }
+    }
+
+    // ========== PATCH 5: Method baru ==========
+    /// Kirim notifikasi aktivasi langsung ke peer target via direct message.
+    pub async fn send_activation_notification(&self, peer_id: PeerId, cert: ActivationCertificate) {
+        let body = bincode::serialize(&cert).unwrap_or_default();
+        let _ = self.send_typed_message(
+            peer_id,
+            "governance.activation_notify",
+            body,
+        ).await;
     }
 
     pub fn world_snapshot(&self) -> Option<crate::world_state::WorldStateSnapshot> {

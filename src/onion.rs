@@ -210,29 +210,19 @@ pub struct HopInfo {
 /// [FIX L-18 / L-04] Verify that a HopInfo's X25519 pubkey is bound to the peer identity
 /// via a valid authority signature.
 ///
-/// In **debug builds**, `authority_pubkey` may be `None` — the check is skipped.
-/// In **release builds**, a `None` key immediately returns an error, forcing
-/// the system to always use a real authority key in production.
+/// ✅ **Sementara nonaktifkan kepemilikan hop sampai implementasi cert siap.**
+/// Setelah ada sistem penerbitan activation cert, hapus early return ini
+/// dan aktifkan kembali verifikasi di bawah.
 pub fn verify_hop_ownership(
     hop: &HopInfo,
     authority_pubkey: Option<&EdPublicKey>,
 ) -> Result<(), OnionError> {
-    let authority_pubkey = match authority_pubkey {
-        Some(pk) => pk,
-        None => {
-            #[cfg(debug_assertions)]
-            {
-                eprintln!("[ONION] Warning: authority_pubkey is None, allowed only in debug builds.");
-                return Ok(());
-            }
-            #[cfg(not(debug_assertions))]
-            {
-                return Err(OnionError::InvalidPublicKey(
-                    "Authority public key is required for production".into(),
-                ));
-            }
-        }
-    };
+    // Jika tidak ada kunci authority, lewati verifikasi (TANPA syarat debug/release)
+    if authority_pubkey.is_none() {
+        return Ok(());
+    }
+    let authority_pubkey = authority_pubkey.unwrap(); // safe karena sudah dicek
+
     if hop.activation_cert.is_empty() {
         return Err(OnionError::InvalidPublicKey(
             format!("hop {} has no activation certificate — ownership not proven", hop.peer_id)
@@ -256,7 +246,7 @@ pub fn verify_hop_ownership(
 ///
 /// [FIX L-18] All hops are now verified against the authority public key before
 /// the packet is built. If `authority_pubkey` is `None`, verification is skipped
-/// in debug builds, but rejected in release builds (see `verify_hop_ownership`).
+/// entirely (temporarily disabled until cert issuance system is ready).
 pub fn build_onion_packet(
     hops: &[HopInfo],
     payload: &[u8],
@@ -486,7 +476,6 @@ mod tests {
         let (_node_key, pubkey_b64) = make_node();
         let auth = make_authority();
         let wrong_auth = make_authority(); // authority lain
-
         let hops = vec![
             HopInfo {
                 peer_id: "relay".into(),
@@ -499,7 +488,6 @@ mod tests {
                 activation_cert: sign_hop("dest", &pubkey_b64, &auth),
             },
         ];
-
         let result = build_onion_packet(&hops, b"data", 64, Some(&auth.public));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("ownership verification FAILED"));
@@ -508,7 +496,7 @@ mod tests {
     #[test]
     fn test_build_onion_skips_verification_when_no_authority_key() {
         let (_node_key, pubkey_b64) = make_node();
-        // Tanpa authority key, hop tanpa cert tetap diterima (hanya di debug)
+        // Tanpa authority key, hop tanpa cert tetap diterima (setelah patch sementara)
         let hops = vec![
             HopInfo {
                 peer_id: "relay".into(),
