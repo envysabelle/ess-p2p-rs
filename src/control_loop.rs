@@ -132,6 +132,7 @@ impl ControlLoop {
                 },
             ));
 
+            // ✅ Patch: role dinamis dari security, bukan hardcoded "supernode"
             let role = self.controller.get_security()
                 .map(|s| s.current_role().as_str().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
