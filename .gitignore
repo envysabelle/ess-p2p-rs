@@ -1,0 +1,7 @@
+/target
+/data
+.env
+*.log
+.DS_Store/target
+ecosystem.config.js
+run-supernode.sh
