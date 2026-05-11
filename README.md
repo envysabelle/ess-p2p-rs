@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://envysabelle.com/assets/images/logo.png" alt="ESS Logo" width="240" style="display:block;margin:auto;object-fit:contain;"/>
+  <img src="./assets/logo.png" alt="ESS Logo" width="200"/>
   <h1>ESS — Sovereign Infrastructure Engine</h1>
   <p><em>Autonomous · Self-Healing · Censorship-Resistant · Post-Quantum Ready</em></p>
 </div>
@@ -11,25 +11,25 @@
 > Understanding the distinction between hardware and software is the foundation of everything ESS does.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│               PHYSICAL LAYER — Sabelle Black Box                │
-│                                                                 │
-│   Hardware node optimized for running ESS.                      │
-│   Plug-and-play deployment, isolated secure enclave,            │
-│   with zero dependency on any hyperscaler.                      │
-│                                                                 │
-│   [Can be replaced by: VPS / Bare-metal / Cloud Instance]      │
-└─────────────────────┬───────────────────────────────────────────┘
-                      │ runs on top of
-┌─────────────────────▼───────────────────────────────────────────┐
-│              SOFTWARE LAYER — ESS Node (this repo)              │
-│                                                                 │
-│   Sovereign Infrastructure Engine written in Rust.                     │
-│   Manages identity, authority, routing, security,               │
-│   governance, and state consistency autonomously.               │
-│                                                                 │
-│   This is what you deploy, configure, and operate.              │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│          PHYSICAL LAYER — Sabelle Black Box          │
+│                                                      │
+│   Hardware node optimized for running ESS.           │
+│   Plug-and-play, isolated secure enclave,            │
+│   zero dependency on any hyperscaler.                │
+│                                                      │
+│   [Replaceable: VPS / Bare-metal / Cloud Instance]   │
+└────────────────────┬─────────────────────────────────┘
+                     │ runs on top of
+┌────────────────────▼─────────────────────────────────┐
+│        SOFTWARE LAYER — ESS Node (this repo)         │
+│                                                      │
+│   Sovereign Infrastructure Engine in Rust.           │
+│   Manages identity, authority, routing, security,    │
+│   governance, and state consistency autonomously.    │
+│                                                      │
+│   This is what you deploy, configure, and operate.   │
+└──────────────────────────────────────────────────────┘
 ```
 
 **ESS (Essential Sovereign System)** is not a messaging protocol. ESS is a **Sovereign Infrastructure Engine** — an autonomous infrastructure layer that enables sovereign, self-healing, and censorship-resistant networks to operate without dependency on public cloud providers, centralized authorities, or any third-party infrastructure.
@@ -75,72 +75,67 @@ Most people hear "P2P" and immediately think: *a decentralized chat app*. ESS is
 ## System Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                           main.rs                                │
-│         Lifecycle: Boot → Ready → Recovery → Shutdown            │
-└──────────────┬───────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                       main.rs                        │
+│          Boot → Ready → Recovery → Shutdown          │
+└──────────────┬───────────────────────────────────────┘
                │
-┌──────────────▼──────────────────────────────────────────────────┐
-│                      SOVEREIGNTY LAYER                           │
-│                                                                  │
-│  ┌─────────────────┐   ┌──────────────────────────────────────┐  │
-│  │   Identity      │   │        Authority Manager             │  │
-│  │   (Ed25519)     │   │   (RBAC + Signed Policy Bundle)      │  │
-│  └─────────────────┘   └──────────────────────────────────────┘  │
-│                                                                  │
-│  ┌─────────────────┐   ┌──────────────────────────────────────┐  │
-│  │  Governance     │   │         Security Runtime             │  │
-│  │  (On-chain      │   │   (Replay detection + Sig verify     │  │
-│  │   Voting)       │   │    + Timestamp window enforcement)   │  │
-│  └─────────────────┘   └──────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────▼───────────────────────────────────────┐
+│                  SOVEREIGNTY LAYER                   │
+│                                                      │
+│  ┌────────────────────┐  ┌────────────────────────┐  │
+│  │      Identity      │  │   Authority Manager    │  │
+│  │     (Ed25519)      │  │ (RBAC + Policy Bundle) │  │
+│  └────────────────────┘  └────────────────────────┘  │
+│                                                      │
+│  ┌────────────────────┐  ┌────────────────────────┐  │
+│  │     Governance     │  │    Security Runtime    │  │
+│  │ (On-chain Voting)  │  │ (Replay + Sig verify)  │  │
+│  └────────────────────┘  └────────────────────────┘  │
+└──────────────────────────────────────────────────────┘
                │
-┌──────────────▼──────────────────────────────────────────────────┐
-│                     AUTONOMOUS LAYER                             │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │                      Ghost Engine                           │ │
-│  │   Init → Wake → Beacon → Sync → Idle → Sleep               │ │
-│  │                              ↓                             │ │
-│  │                         Panic → Zeroized                   │ │
-│  │                                                            │ │
-│  │  Self-healing • Peer reputation • Autonomous isolation     │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-│                                                                  │
-│  ┌─────────────────┐   ┌──────────────────────────────────────┐  │
-│  │  CRDT State     │   │         Merkle-DAG                   │  │
-│  │  Engine         │   │   Immutable forensic trail per       │  │
-│  │  (5 primitives) │   │   state change                       │  │
-│  └─────────────────┘   └──────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────▼───────────────────────────────────────┐
+│                   AUTONOMOUS LAYER                   │
+│                                                      │
+│  ┌────────────────────────────────────────────────┐  │
+│  │                  Ghost Engine                  │  │
+│  │        Init→Wake→Beacon→Sync→Idle→Sleep        │  │
+│  │                       ↓                        │  │
+│  │                Panic → Zeroized                │  │
+│  │         Self-healing · Peer reputation         │  │
+│  └────────────────────────────────────────────────┘  │
+│                                                      │
+│  ┌────────────────────┐  ┌────────────────────────┐  │
+│  │     CRDT State     │  │       Merkle-DAG       │  │
+│  │   (5 primitives)   │  │ Immutable audit trail  │  │
+│  └────────────────────┘  └────────────────────────┘  │
+└──────────────────────────────────────────────────────┘
                │
-┌──────────────▼──────────────────────────────────────────────────┐
-│                      TRANSPORT LAYER                             │
-│                                                                  │
-│  libp2p Swarm                                                    │
-│  ├─ Kademlia DHT        (peer discovery & routing)               │
-│  ├─ Noise Protocol      (encrypted transport)                    │
-│  ├─ Yamux               (multiplexing)                           │
-│  ├─ Identify / Ping     (liveness)                               │
-│  └─ RequestResponse     (direct messaging)                       │
-│                                                                  │
-│  Onion Routing Layer                                             │
-│  (3-hop min • Ephemeral X25519 + ChaCha20-Poly1305 per hop)     │
-│                                                                  │
-│  Post-Quantum Hybrid Layer                                       │
-│  (ML-KEM-1024 / FIPS 203 + X25519 → HKDF)                       │
-│                                                                  │
-│  Identity-Centric Networking (Zero-Trust)                        │
-│  No IP-Based Trust: connections are never trusted based on IP    │
-│  or location. Trust is derived solely from Ed25519 identity keys │
-│  and valid Authority-signed activation certificates.             │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────▼───────────────────────────────────────┐
+│                   TRANSPORT LAYER                    │
+│                                                      │
+│  libp2p Swarm                                        │
+│  ├─ Kademlia DHT    (discovery & routing)            │
+│  ├─ Noise Protocol  (encrypted transport)            │
+│  ├─ Yamux           (multiplexing)                   │
+│  ├─ Identify/Ping   (liveness)                       │
+│  └─ RequestResponse (direct messaging)               │
+│                                                      │
+│  Onion Routing (3-hop minimum)                       │
+│  X25519 ECDH + ChaCha20-Poly1305/hop                 │
+│                                                      │
+│  Post-Quantum Hybrid                                 │
+│  ML-KEM-1024 (FIPS 203) + X25519 → HKDF              │
+│                                                      │
+│  Zero-Trust Networking                               │
+│  Trust = Ed25519 keys + Auth-signed certs            │
+└──────────────────────────────────────────────────────┘
                │
-┌──────────────▼──────────────────────────────────────────────────┐
-│                   OBSERVABILITY LAYER                            │
-│            HTTP Dashboard: REST API + SSE Telemetry              │
-│                    Port: ESS_DASHBOARD_BIND                      │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────▼───────────────────────────────────────┐
+│                 OBSERVABILITY LAYER                  │
+│            HTTP Dashboard: REST API + SSE            │
+│               Port: ESS_DASHBOARD_BIND               │
+└──────────────────────────────────────────────────────┘
 ```
 
 ### Startup Flow (`main.rs`)
