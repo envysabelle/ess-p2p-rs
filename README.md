@@ -1,99 +1,133 @@
-# ESS P2P RS — Backbone Network Node
+# ESS — Sovereign Network Operating System
 
-> **ESS P2P Backbone** is a decentralized peer-to-peer network node built on [libp2p](https://libp2p.io/), written in Rust. It is designed for secure, autonomous, and censorship-resistant communication, with layered cryptography ranging from onion routing to post-quantum cryptography (PQC).
-
----
-
-## Table of Contents
-
-- [Key Features](#key-features)
-- [System Architecture](#system-architecture)
-- [Prerequisites](#prerequisites)
-- [Project Structure](#project-structure)
-- [Environment Configuration](#environment-configuration)
-- [Quick Start](#quick-start)
-  - [First Node (Genesis Supernode)](#1-first-node-genesis-supernode)
-  - [Subsequent Nodes (Join)](#2-subsequent-nodes-join)
-  - [Manual via run.sh](#3-manual-via-runsh)
-- [Node Roles](#node-roles)
-- [Security System](#security-system)
-- [HTTP Dashboard](#http-dashboard)
-- [Ghost Engine](#ghost-engine)
-- [Governance](#governance)
-- [CRDT & Merkle-DAG](#crdt--merkle-dag)
-- [Onboarding](#onboarding)
-- [Testing](#testing)
-- [Utilities](#utilities)
-- [Production Notes](#production-notes)
+> **ESS (Essential Sovereign System)** is not a messaging protocol. ESS is a **Network Operating System** — an autonomous infrastructure layer that enables sovereign, self-healing, and censorship-resistant networks to operate without dependency on public cloud providers, centralized authorities, or any third-party infrastructure.
+>
+> This Rust codebase is the **Software Layer** of the ESS ecosystem. It is designed to run on top of **Sabelle Black Box** hardware (Physical Layer), but can be deployed on any VPS, bare-metal server, or cloud environment as a fully operator-controlled **Sovereign IaaS (Infrastructure as a Service)**.
 
 ---
 
-## Key Features
+## What Makes ESS Different?
 
-| Feature | Detail |
+Most people hear "P2P" and immediately think: *a decentralized chat app*. ESS is not that.
+
+| Category | Common Examples | ESS |
+|---|---|---|
+| **Messaging P2P** | Signal, Session, Briar | ❌ Not this |
+| **File Sharing P2P** | BitTorrent, IPFS | ❌ Not this |
+| **Blockchain P2P** | Bitcoin, Ethereum | ❌ Not this |
+| **Sovereign Infrastructure** | — | ✅ This is ESS |
+
+**P2P in ESS is the transport layer, not the end product.** Running on top of it is a full infrastructure ecosystem: decentralized governance, autonomous routing, immutable audit trails, and node identity management that depends on no single entity.
+
+---
+
+## The Two Layers of ESS
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│               PHYSICAL LAYER — Sabelle Black Box                │
+│                                                                 │
+│   Hardware node optimized for running ESS.                      │
+│   Plug-and-play deployment, isolated secure enclave,            │
+│   with zero dependency on any hyperscaler.                      │
+│                                                                 │
+│   [Can be replaced by: VPS / Bare-metal / Cloud Instance]      │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │ runs on top of
+┌─────────────────────▼───────────────────────────────────────────┐
+│              SOFTWARE LAYER — ESS Node (this repo)              │
+│                                                                 │
+│   Network Operating System written in Rust.                     │
+│   Manages identity, authority, routing, security,               │
+│   governance, and state consistency autonomously.               │
+│                                                                 │
+│   This is what you deploy, configure, and operate.              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Core Capabilities
+
+| Capability | Description |
 |---|---|
-| **P2P Networking** | libp2p with Kademlia DHT, Noise protocol, Yamux multiplexing |
-| **Onion Routing** | 3-hop default, ephemeral X25519 ECDH + ChaCha20-Poly1305 per hop |
-| **Post-Quantum Crypto** | ML-KEM-1024 (Kyber) hybrid with X25519 via HKDF |
-| **Shamir Secret Sharing** | Threshold scheme (k, n) over GF(2⁸), AES-compatible polynomial |
-| **Authority & RBAC** | Supernode-based authority with 7 role levels and signed config bundles |
-| **CRDT State** | LWW-Register, G-Set, G-Counter, LWW-Map, OR-Set — eventual consistency |
-| **Merkle-DAG Audit** | Immutable audit trail for every CRDT state change |
-| **Ghost Engine** | Autonomous daemon (8-state machine) for self-healing & peer management |
-| **Governance** | On-chain voting proposals with quorum ratio among supernodes |
-| **Key Rotation** | Forward secrecy via hash-chain seed rotation every 24 hours |
+| **Autonomous Mesh Routing** | libp2p + Kademlia DHT — the network discovers and sustains itself |
+| **Onion Routing** | 3-hop default, ephemeral X25519 ECDH + ChaCha20-Poly1305 per hop, no single point of observation |
+| **Post-Quantum Cryptography** | ML-KEM-1024 (Kyber) hybrid with X25519 via HKDF — resistant to quantum computing attacks |
+| **Ghost Engine** | Autonomous 8-state machine daemon: self-healing, peer management, panic isolation |
+| **Sovereign Governance** | Decentralized voting among supernodes — network policy is decided collectively, not by a single admin |
+| **CRDT State + Merkle-DAG** | Eventual consistency without a central coordinator + immutable audit trail for every state change |
+| **RBAC + Authority Chain** | 7 role levels, policy distributed via signed ConfigBundle |
+| **Forward Secrecy** | 24-hour key rotation via hash-chain — past sessions cannot be decrypted even if the current key is compromised |
+| **Shamir Secret Sharing** | Threshold scheme (k, n) over GF(2⁸) for distributing critical secrets |
 | **Encrypted Keystore** | AES-256-GCM + PBKDF2 for local key protection |
-| **HTTP Dashboard** | REST API + SSE live telemetry on port 8080 |
-| **Onboarding** | HMAC-SHA256 serial verification + X25519 pubkey exchange |
-| **Bootstrap Cache** | Automatic peer caching for reconnect after restart |
 
 ---
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        main.rs                              │
-│  Lifecycle: Boot → Ready → Recovery → Shutdown              │
-└────────────┬────────────────────────────────────────────────┘
-             │
-┌────────────┴─────────────────────────────────┐
-│              Subsystem Layer                 │
-│                                              │
-│  ┌──────────────┐  ┌──────────────────────┐  │
-│  │  Identity    │  │  Authority Manager   │  │
-│  │  (Ed25519)   │  │  (RBAC + Policy)     │  │
-│  └──────────────┘  └──────────────────────┘  │
-│                                              │
-│  ┌──────────────┐  ┌──────────────────────┐  │
-│  │  Ghost Engine│  │  Security Runtime    │  │
-│  │  (8 states)  │  │  (Replay + Sig check)│  │
-│  └──────────────┘  └──────────────────────┘  │
-│                                              │
-│  ┌──────────────┐  ┌──────────────────────┐  │
-│  │  Governance  │  │  CRDT State Engine   │  │
-│  │  (Voting)    │  │  + Merkle-DAG        │  │
-│  └──────────────┘  └──────────────────────┘  │
-└───────────────────────┬──────────────────────┘
-                        │
-          ┌─────────────┴──────────────────┐
-          │         Network Layer          │
-          │  libp2p Swarm                  │
-          │  ├─ Kademlia DHT               │
-          │  ├─ Identify                   │
-          │  ├─ Ping                       │
-          │  ├─ RequestResponse            │
-          │  └─ Noise + Yamux              │
-          │                               │
-          │  Onion Routing Layer          │
-          │  (X25519 + ChaCha20-Poly1305) │
-          └───────────────────────────────┘
-                        │
-          ┌─────────────┴──────────────────┐
-          │       Dashboard HTTP           │
-          │  REST API + SSE Telemetry      │
-          │  Port: ESS_DASHBOARD_BIND      │
-          └───────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                           main.rs                                │
+│         Lifecycle: Boot → Ready → Recovery → Shutdown            │
+└──────────────┬───────────────────────────────────────────────────┘
+               │
+┌──────────────▼──────────────────────────────────────────────────┐
+│                      SOVEREIGNTY LAYER                           │
+│                                                                  │
+│  ┌─────────────────┐   ┌──────────────────────────────────────┐  │
+│  │   Identity      │   │        Authority Manager             │  │
+│  │   (Ed25519)     │   │   (RBAC + Signed Policy Bundle)      │  │
+│  └─────────────────┘   └──────────────────────────────────────┘  │
+│                                                                  │
+│  ┌─────────────────┐   ┌──────────────────────────────────────┐  │
+│  │  Governance     │   │         Security Runtime             │  │
+│  │  (On-chain      │   │   (Replay detection + Sig verify     │  │
+│  │   Voting)       │   │    + Timestamp window enforcement)   │  │
+│  └─────────────────┘   └──────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
+               │
+┌──────────────▼──────────────────────────────────────────────────┐
+│                     AUTONOMOUS LAYER                             │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────────┐ │
+│  │                      Ghost Engine                           │ │
+│  │   Init → Wake → Beacon → Sync → Idle → Sleep               │ │
+│  │                              ↓                             │ │
+│  │                         Panic → Zeroized                   │ │
+│  │                                                            │ │
+│  │  Self-healing • Peer reputation • Autonomous isolation     │ │
+│  └─────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  ┌─────────────────┐   ┌──────────────────────────────────────┐  │
+│  │  CRDT State     │   │         Merkle-DAG                   │  │
+│  │  Engine         │   │   Immutable audit trail per          │  │
+│  │  (5 primitives) │   │   state change                       │  │
+│  └─────────────────┘   └──────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
+               │
+┌──────────────▼──────────────────────────────────────────────────┐
+│                      TRANSPORT LAYER                             │
+│                                                                  │
+│  libp2p Swarm                                                    │
+│  ├─ Kademlia DHT        (peer discovery & routing)               │
+│  ├─ Noise Protocol      (encrypted transport)                    │
+│  ├─ Yamux               (multiplexing)                           │
+│  ├─ Identify / Ping     (liveness)                               │
+│  └─ RequestResponse     (direct messaging)                       │
+│                                                                  │
+│  Onion Routing Layer                                             │
+│  (3-hop • Ephemeral X25519 + ChaCha20-Poly1305 per hop)         │
+│                                                                  │
+│  Post-Quantum Hybrid Layer                                       │
+│  (ML-KEM-1024 + X25519 → HKDF)                                  │
+└──────────────────────────────────────────────────────────────────┘
+               │
+┌──────────────▼──────────────────────────────────────────────────┐
+│                   OBSERVABILITY LAYER                            │
+│            HTTP Dashboard: REST API + SSE Telemetry              │
+│                    Port: ESS_DASHBOARD_BIND                      │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Startup Flow (`main.rs`)
@@ -128,7 +162,7 @@ brew install openssl pkg-config
 ## Project Structure
 
 ```
-ess-p2p-rs-main/
+ess-p2p-rs/
 ├── Cargo.toml                  # Main dependencies
 ├── export_pubkey.rs            # Utility to export public key from identity.bin
 ├── genesis.sh                  # Automated genesis supernode setup script
@@ -164,7 +198,7 @@ ess-p2p-rs-main/
 │   ├── merkle_dag.rs           # Merkle-DAG audit trail for CRDT state
 │   │
 │   ├── ghost.rs                # GhostEngine (8-state machine)
-│   ├── ghost_bridge.rs         # GhostBridge (channel between Ghost & Network)
+│   ├── ghost_bridge.rs         # GhostBridge (channel Ghost ↔ Network)
 │   ├── ghost_health.rs         # GhostHealthSnapshot, health assessment
 │   ├── ghost_policy.rs         # GhostPolicy (reputation, throttle, self-heal)
 │   ├── ghost_runtime.rs        # GhostRuntime (async task spawner)
@@ -181,59 +215,58 @@ ess-p2p-rs-main/
 │   │   └── tests.rs            # Governance unit tests
 │   │
 │   ├── dashboard/
-│   │   ├── mod.rs              # Re-export dashboard
+│   │   ├── mod.rs
 │   │   ├── api.rs              # JSON payload builder (world, summary, logs)
 │   │   ├── http.rs             # HTTP handler (axum/hyper routes)
-│   │   ├── model.rs            # DashboardSummary, NodeInfo, NodeHealth, RouteInfo, LogEvent
+│   │   ├── model.rs            # DashboardSummary, NodeInfo, NodeHealth, etc.
 │   │   ├── server.rs           # serve_dashboard_http (bind + listen)
 │   │   ├── service.rs          # DashboardService (queries DashboardStore)
-│   │   └── store.rs            # DashboardStore (in-memory state for dashboard)
-│   ├── dashboard_bridge.rs     # DashboardBridge (channel: network updates → dashboard)
+│   │   └── store.rs            # DashboardStore (in-memory state)
+│   ├── dashboard_bridge.rs     # DashboardBridge (network updates → dashboard)
 │   │
 │   └── network/
-│       ├── mod.rs              # Re-exports `run` entry point
-│       ├── util.rs             # Network utility helpers
+│       ├── mod.rs
+│       ├── util.rs
 │       └── runtime/
-│           ├── mod.rs          # Re-exports runner
+│           ├── mod.rs
 │           ├── runner.rs       # RuntimeContext, run_with_dashboard_and_authority
-│           ├── swarm.rs        # libp2p Swarm builder (Noise, Yamux, Kad, Identify)
+│           ├── swarm.rs        # libp2p Swarm builder
 │           ├── events.rs       # SwarmEvent handler
 │           ├── governance.rs   # Governance message handler in network layer
-│           ├── support.rs      # Network runtime helper functions
+│           ├── support.rs      # Network runtime helpers
 │           └── types.rs        # OnboardRequest, TelemetryEvent, shared types
 │
 └── tests/
-    ├── onboarding_tests.rs     # Onboarding flow unit tests
+    ├── onboarding_tests.rs
     ├── run_smoke.sh            # Smoke test: single node startup
     ├── run_three_node.sh       # Integration test: 3-node cluster
-    └── assert_logs.sh          # Helper: assert log output
+    └── assert_logs.sh
 ```
 
 ---
 
 ## Environment Configuration
 
-The `.env` file is generated automatically by `setup.sh`. Below are all supported variables:
+The `.env` file is generated automatically by `setup.sh`. All supported variables:
 
 ```env
-# ── REQUIRED ────────────────────────────────────────────────────────────────
+# ── REQUIRED ─────────────────────────────────────────────────────────────────
 # Master network secret — MUST BE IDENTICAL across all nodes in a cluster.
 # Used for: PBKDF2 keystore, HMAC serial verification, key derivation.
 ESS_MASTER_SECRET="change-this-in-production"
 
-# Alternative password specifically for the keystore (if different from MASTER_SECRET)
-# ESS_KEYSTORE_PASSWORD="keystore-password"
+# ESS_KEYSTORE_PASSWORD="keystore-password"  # Optional if different from MASTER_SECRET
 
-# ── NODE IDENTITY ──────────────────────────────────────────────────────────
+# ── NODE IDENTITY ─────────────────────────────────────────────────────────────
 ESS_NODE_NAME="ESS Node hostname"
 ESS_NODE_EMAIL="node@hostname.local"
 ESS_SERIAL_NUMBER="ESSBB-NODE-001-XXXX"   # Generated by setup.sh
 
-# ── NODE ROLE ──────────────────────────────────────────────────────────────
+# ── NODE ROLE ─────────────────────────────────────────────────────────────────
 # Options: supernode | gateway | client | observer | validator | blocked
 NODE_ROLE=supernode
 
-# ── NETWORK ────────────────────────────────────────────────────────────────
+# ── NETWORK ───────────────────────────────────────────────────────────────────
 PUBLIC_IP=1.2.3.4        # Public IP of this node
 P2P_PORT=5001            # TCP port for libp2p
 
@@ -241,55 +274,47 @@ P2P_PORT=5001            # TCP port for libp2p
 # Format: /ip4/<IP>/tcp/<PORT>/p2p/<PEER_ID>
 BOOTSTRAP_P2P_MULTIADDRS=
 
-# ── AUTHORITY ──────────────────────────────────────────────────────────────
+# ── AUTHORITY ─────────────────────────────────────────────────────────────────
 # PeerID of the authority supernode (filled in after genesis)
 AUTHORITY_SUPERNODES=12D3KooW...
 
-# ── DASHBOARD ──────────────────────────────────────────────────────────────
+# ── DASHBOARD ─────────────────────────────────────────────────────────────────
 ESS_DASHBOARD_BIND=127.0.0.1:8080
-# ESS_DASHBOARD_TOKEN=secret-token    # Optional: Bearer token auth
+# ESS_DASHBOARD_TOKEN=secret-token    # Required if dashboard is exposed to the network
 
-# ── GHOST ENGINE ───────────────────────────────────────────────────────────
-# Minimum active cycles before Ghost is allowed to sleep (default: 10)
+# ── GHOST ENGINE ──────────────────────────────────────────────────────────────
 # GHOST_MIN_AWAKE_CYCLES=10
 
-# ── ONION ROUTING ──────────────────────────────────────────────────────────
-# Number of hops (0 = disabled, default: 3)
-# ONION_HOPS=3
-# Payload size after padding in bytes (0 = no padding, default: 1400)
-# ONION_PAYLOAD_SIZE=1400
+# ── ONION ROUTING ─────────────────────────────────────────────────────────────
+# ONION_HOPS=3             # 0 = disabled
+# ONION_PAYLOAD_SIZE=1400  # Bytes after padding
 
-# ── LOGGING ────────────────────────────────────────────────────────────────
+# ── LOGGING ───────────────────────────────────────────────────────────────────
 RUST_LOG=info
-# JSON format: RUST_LOG_FORMAT=json
+# RUST_LOG_FORMAT=json
 ```
 
 ---
 
 ## Quick Start
 
-### 1. First Node (Genesis Supernode)
+### 1. First Node — Genesis Supernode
 
-Use the automated `genesis.sh` script — it handles the entire 2-step process automatically:
+The `genesis.sh` script automates the entire 2-step process:
 
 ```bash
-# Clone & enter directory
 git clone <repo-url> ess-p2p-rs
 cd ess-p2p-rs
 
-# Run initial setup
 bash setup.sh
-
-# Run genesis (auto-detects PeerID, updates .env, then runs permanently)
 bash genesis.sh
 ```
 
-`genesis.sh` performs the following steps:
-
+`genesis.sh` performs the following:
 1. Builds the binary (`cargo build --release`)
 2. Runs the node temporarily (10–30 seconds), captures the PeerID from logs
 3. Updates `AUTHORITY_SUPERNODES` in `.env` with the detected PeerID
-4. Deletes `data/authority.bin` so the genesis authority is re-created
+4. Deletes `data/authority.bin` so the genesis authority is re-created fresh
 5. Starts the node permanently as the genesis supernode
 
 Save the multiaddr printed in the output — you will need it for subsequent nodes:
@@ -301,28 +326,18 @@ Multiaddr:        /ip4/1.2.3.4/tcp/5001/p2p/12D3KooW...
 
 ---
 
-### 2. Subsequent Nodes (Join)
+### 2. Subsequent Nodes — Join Cluster
 
 ```bash
-# On the new node, run setup first
 bash setup.sh
-
-# Join with the multiaddr of the first supernode
 bash join.sh /ip4/1.2.3.4/tcp/5001/p2p/12D3KooW...
 ```
-
-`join.sh` will:
-
-1. Validate the multiaddr format
-2. Set `BOOTSTRAP_P2P_MULTIADDRS` in `.env`
-3. Start the node (`cargo run --release`)
 
 ---
 
 ### 3. Manual via run.sh
 
 ```bash
-# Edit .env as needed, then:
 bash run.sh           # release mode (default)
 bash run.sh --debug   # debug mode
 ```
@@ -343,52 +358,72 @@ Configured via `NODE_ROLE` in `.env`. Each role has distinct access rights enfor
 | `validator` | 5 | All gateway + admin update |
 | `supernode` | 6 | Full authority, can update cluster policy |
 
-Actions checked: `Connect`, `Route`, `GatewayAccess`, `GatewayEgress`, `WebTraffic`, `AdminUpdate`
-
 The role is stored in `data/identity/role.txt` and bound to `EssIdentity` at startup. Role changes issued by an authority supernode are propagated via a cryptographically signed `ConfigBundle`.
+
+---
+
+## Ghost Engine — The Autonomous Brain of ESS
+
+Ghost is not just a health checker. It is an **autonomous daemon** that runs the network's full intelligence layer: detecting anomalies, isolating misbehaving peers, maintaining minimum connectivity, and zeroizing sensitive data under critical conditions — all without human intervention.
+
+```
+Init → Wake → Beacon → Sync → Idle → Sleep
+                                    ↓
+                               Panic → Zeroized
+```
+
+| State | Description |
+|---|---|
+| `Init` | Initialization, config validation |
+| `Wake` | Active, starting processing |
+| `Beacon` | Broadcasting presence to the network |
+| `Sync` | Synchronizing state with peers |
+| `Idle` | No activity, waiting |
+| `Sleep` | Resource-saving mode |
+| `Panic` | Critical condition, self-isolation |
+| `Zeroized` | Self-destruct: all sensitive data is zeroized |
+
+### Ghost Policy
+
+| Parameter | Default | Description |
+|---|---|---|
+| `min_reputation_to_connect` | 0.2 | Minimum peer reputation to accept a connection |
+| `quarantine_threshold` | < 0.2 | Peer isolation threshold |
+| `panic_on_critical` | true | Auto-panic on critical condition |
+| `drop_on_policy_denial` | true | Drop connection if denied by policy |
 
 ---
 
 ## Security System
 
-### Cryptography
+### Cryptography Stack
 
 | Layer | Algorithm | Implementation |
 |---|---|---|
 | Identity | Ed25519 | `ed25519-dalek`, libp2p keypair |
 | Transport | Noise Protocol + Yamux | libp2p built-in |
 | Onion Routing | Ephemeral X25519 ECDH + ChaCha20-Poly1305 | `x25519-dalek`, `chacha20poly1305` |
-| Post-Quantum | ML-KEM-1024 (Kyber) + X25519 hybrid | `ml-kem` crate + HKDF-SHA3-256 |
+| Post-Quantum | ML-KEM-1024 (Kyber) + X25519 hybrid | `ml-kem` + HKDF-SHA3-256 |
 | Keystore | AES-256-GCM + PBKDF2-SHA256 | `aes-gcm`, `pbkdf2` |
-| Secret Sharing | Shamir GF(2⁸) threshold | Custom implementation in `sss.rs` |
+| Secret Sharing | Shamir GF(2⁸) threshold | Custom in `sss.rs` |
 | Message Auth | HMAC-SHA256 | `hmac` + `sha2` |
 | Key Derivation | HKDF-SHA256 | `hkdf` |
-
-### Security Runtime (`security_runtime.rs`)
-
-- **Replay Detection:** Nonce-based with a timestamp window of ±N minutes
-- **Signature Verification:** Every `DirectRequest` has its Ed25519 signature verified
-- **Peer Identity Validation:** Peer public key hash is checked against the authority registry
-- **Timestamp Window Enforcement:** Requests outside the window are immediately rejected
 
 ### Onion Routing (`onion.rs`)
 
 Each message passes through 3 hops by default:
 
 1. Sender generates an ephemeral X25519 keypair per hop
-2. ECDH between ephemeral private key + recipient hop's public key → shared secret
+2. ECDH between the ephemeral private key + recipient hop's X25519 public key → shared secret
 3. HKDF(shared_secret) → ChaCha20-Poly1305 key + nonce
 4. Payload is wrapped from outermost to innermost (multi-layer encryption)
 5. Each hop can only decrypt one layer and only knows the next hop
 
-Additional security:
+Every `HopInfo` must include an `activation_cert` — an Ed25519 signature from the authority binding the PeerID to its X25519 public key.
 
-- Every `HopInfo` must include an `activation_cert` — an Ed25519 signature from the authority binding the PeerID to its X25519 public key
-- In release mode: `authority_pubkey` is required to verify every hop
+### Forward Secrecy via Key Rotation (`id_rotation.rs`)
 
-### Key Rotation (`id_rotation.rs`)
-
-Every 24 hours, the system rotates its internal seed using a hash-chain forward secrecy scheme:
+Every 24 hours, the internal seed is rotated using a hash-chain scheme:
 
 ```
 epoch_0: seed = HKDF(master_secret, epoch_number)
@@ -411,6 +446,64 @@ Keys are zeroized after use (`ZeroizeOnDrop`).
 
 ---
 
+## Governance — Collective Sovereignty
+
+A decentralized voting system among supernodes for network policy changes. No single admin can decide unilaterally.
+
+### Proposal Types
+
+| Proposal | Description |
+|---|---|
+| `AddSupernode` | Add a new supernode to the authority |
+| `RemoveSupernode` | Remove a supernode from the authority |
+| `UpdatePolicy` | Update network policy (allowed_peers, actions, bootstrap_addrs) |
+| `BanPeer` | Ban a peer from the network |
+| `RotateKeys` | Trigger a network-wide key rotation |
+
+### Voting Flow
+
+1. A supernode creates a proposal → broadcasts to all supernodes
+2. Each supernode sends a vote (`true`/`false`) with an HMAC signature
+3. If `votes_for / total_supernodes >= quorum_ratio` → proposal is executed
+4. **Bootstrap mode:** active when supernode count < 2; a single vote is sufficient
+5. **Bootstrap deadline:** 1 hour — after this, bootstrap mode exits automatically
+
+Proposals and votes are persisted to a `sled` database via `governance/store.rs`.
+
+---
+
+## CRDT & Merkle-DAG — Consistency Without a Central Coordinator
+
+### CRDT State (`crdt_state.rs`)
+
+5 CRDT primitives for strong eventual consistency:
+
+| Type | Description | Use Case |
+|---|---|---|
+| `LwwRegister<T>` | Last-Write-Wins; highest timestamp wins | Config values, status |
+| `GSet<T>` | Grow-only set; elements can only be added | Peer list, audit entries |
+| `GCounter` | Grow-only counter per node | Message count, hop count |
+| `LwwMap<K,V>` | LWW per key | Peer registry |
+| `OrSet<T>` | Observed-Remove Set | Peer presence with remove support |
+
+### Merkle-DAG Audit Trail (`merkle_dag.rs`)
+
+Every significant CRDT state change produces a new node:
+
+```
+MerkleNode {
+  index:       u64,         // Sequential index
+  state_hash:  SHA256(...), // Hash of the state JSON
+  parent_hash: Option<...>, // Hash of the previous node
+  timestamp:   u64,         // Unix timestamp
+  metadata:    String,      // Description of the change
+}
+```
+
+The buffer is limited to 1024 nodes (circular). Used for verifying change history and detecting network partitions.
+
+---
+
 ## HTTP Dashboard
 
 The HTTP server runs automatically on `ESS_DASHBOARD_BIND` (default: `127.0.0.1:8080`).
@@ -424,7 +517,7 @@ The HTTP server runs automatically on `ESS_DASHBOARD_BIND` (default: `127.0.0.1:
 | `/nodes` | GET | List of all known nodes |
 | `/routes` | GET | Active routing table |
 | `/logs` | GET | Recent log events |
-| `/health` | GET | Node health check (level: healthy / degraded / critical) |
+| `/health` | GET | Node health check (healthy / degraded / critical) |
 | `/events` | GET | SSE live telemetry stream |
 
 ### Example Response `/`
@@ -451,7 +544,7 @@ The HTTP server runs automatically on `ESS_DASHBOARD_BIND` (default: `127.0.0.1:
 }
 ```
 
-If `ESS_DASHBOARD_TOKEN` is set, every request must include the header:
+If `ESS_DASHBOARD_TOKEN` is set, every request must include:
 
 ```
 Authorization: Bearer <token>
@@ -461,127 +554,26 @@ Authorization: Bearer <token>
 
 1. Copy `nginx.conf` to the server and adjust the domain and SSL path.
 2. Ensure the firewall only opens port `443` (HTTPS) and the P2P port.
-3. Set the `ESS_DASHBOARD_TOKEN` environment variable with a strong token.
+3. Set `ESS_DASHBOARD_TOKEN` with a strong token.
 4. Start the node with `bash run.sh`.
 
-The dashboard will be available at `https://dashboard.ess.example.com` with token authentication. See the reverse proxy configuration example in `nginx.conf`.
-
 ---
 
-## Ghost Engine
+## Node Onboarding
 
-Ghost is an autonomous daemon running in the background, automatically managing node health and behavior. It is implemented as an 8-state state machine:
-
-```
-Init → Wake → Beacon → Sync → Idle → Sleep
-                                    ↓
-                               Panic → Zeroized
-```
-
-| State | Description |
-|---|---|
-| `Init` | Initialization, config validation |
-| `Wake` | Active, starting processing |
-| `Beacon` | Broadcasting presence to the network |
-| `Sync` | Synchronizing state with peers |
-| `Idle` | No activity, waiting |
-| `Sleep` | Resource-saving mode (if `allow_sleep_when_healthy = true`) |
-| `Panic` | Critical condition, self-isolation |
-| `Zeroized` | Self-destruct: all sensitive data is zeroized |
-
-### Ghost Policy (`ghost_policy.rs`)
-
-| Parameter | Default | Description |
-|---|---|---|
-| `min_reputation_to_connect` | 0.2 | Minimum peer reputation to accept a connection |
-| `quarantine_threshold` | < 0.2 | Peer isolation threshold |
-| `throttle_connected_peer_threshold` | configurable | Max peers before throttling kicks in |
-| `min_trusted_peers` | configurable | Minimum trusted peers before panic |
-| `panic_on_critical` | true | Auto-panic on critical condition |
-| `drop_on_policy_denial` | true | Drop connection if denied by policy |
-
-### GhostBridge
-
-Communication channel between the Ghost Engine and the Network Layer:
-
-- Ghost receives events from the network (peer connect/disconnect, route changes)
-- Ghost sends commands to the network (disconnect peer, broadcast beacon)
-
----
-
-## Governance
-
-A decentralized voting system among supernodes for network policy changes.
-
-### Proposal Types (`governance/messages.rs`)
-
-- `AddSupernode` — Add a new supernode to the authority
-- `RemoveSupernode` — Remove a supernode from the authority
-- `UpdatePolicy` — Update policy (allowed_peers, actions, bootstrap_addrs)
-- `BanPeer` — Ban a peer from the network
-- `RotateKeys` — Trigger a network-wide key rotation
-
-### Voting Flow
-
-1. A supernode creates a proposal → broadcasts to all supernodes
-2. Each supernode sends a vote (`true`/`false`) with an HMAC signature
-3. If `votes_for / total_supernodes >= quorum_ratio` → proposal is executed
-4. **Bootstrap mode:** active when supernode count < 2; a single vote is sufficient
-5. **Bootstrap deadline:** 1 hour — after this point, bootstrap mode exits automatically
-
-Proposals and votes are persisted to a `sled` database via `governance/store.rs`.
-
----
-
-## CRDT & Merkle-DAG
-
-### CRDT State (`crdt_state.rs`)
-
-5 CRDT primitives for strong eventual consistency:
-
-| Type | Description | Use Case |
-|---|---|---|
-| `LwwRegister<T>` | Last-Write-Wins; highest timestamp wins | Config values, status |
-| `GSet<T>` | Grow-only set; elements can only be added | Peer list, audit entries |
-| `GCounter` | Grow-only counter per node | Message count, hop count |
-| `LwwMap<K,V>` | LWW per key | Peer registry |
-| `OrSet<T>` | Observed-Remove Set | Peer presence with remove support |
-
-Merge rule: `merge(A, B)` = the state with the most recent timestamp wins (LWW). All nodes that receive the same set of updates will converge to an identical state without central coordination.
-
-### Merkle-DAG Audit Trail (`merkle_dag.rs`)
-
-Every significant CRDT state change produces a new node:
-
-```
-MerkleNode {
-  index:       u64,         // Sequential index
-  state_hash:  SHA256(...), // Hash of the state JSON
-  parent_hash: Option<...>, // Hash of the previous node
-  timestamp:   u64,         // Unix timestamp
-  metadata:    String,      // Description of the change
-}
-```
-
-The buffer is limited to 1024 nodes (circular). Used for verifying change history and detecting network partitions.
-
----
-
-## Onboarding
-
-New nodes must complete the onboarding process before participating fully in the network:
+New nodes must complete the onboarding process before fully participating in the network:
 
 1. `LocalProfile` is created from `ESS_NODE_NAME`, `ESS_NODE_EMAIL`, and `ESS_SERIAL_NUMBER`
 2. Serial number is verified using `HMAC-SHA256(ESS_MASTER_SECRET, base_serial)`
-3. Node generates an X25519 static keypair (`data/identity/x25519_secret.bin`) for onion routing
+3. Node generates a static X25519 keypair (`data/identity/x25519_secret.bin`) for onion routing
 4. An `OnboardRequest` is sent to the supernode via libp2p Request-Response:
-   ```
-   OnboardRequest {
-     peer_id,
-     serial_number,
-     hmac_signature,
-     x25519_pubkey,   // Hex-encoded
-     timestamp,
+   ```json
+   {
+     "peer_id": "...",
+     "serial_number": "...",
+     "hmac_signature": "...",
+     "x25519_pubkey": "hex-encoded",
+     "timestamp": 1234567890
    }
    ```
 5. The supernode verifies the HMAC, assigns a role, and returns a signed `ConfigBundle`
@@ -605,8 +597,6 @@ bash tests/run_three_node.sh
 # Assert log output (used by smoke & integration tests)
 bash tests/assert_logs.sh <logfile> <expected_pattern>
 ```
-
-Governance tests live in `src/governance/tests.rs` and are run via `cargo test`.
 
 ---
 
@@ -648,8 +638,8 @@ data/
 
 ### Security
 
-- **Change `ESS_MASTER_SECRET`** — Do not use the dev default. The secret must be identical across all nodes in a cluster and stored securely (e.g. HashiCorp Vault, AWS Secrets Manager).
-- **Set `ESS_DASHBOARD_TOKEN`** — If the dashboard is exposed to the network, a token is required.
+- **Change `ESS_MASTER_SECRET`** — Do not use the dev default. The secret must be identical across all nodes in a cluster and stored securely (HashiCorp Vault, AWS Secrets Manager, or equivalent).
+- **Set `ESS_DASHBOARD_TOKEN`** — Required if the dashboard is exposed to the network.
 - **Bind Dashboard Locally** — The default `127.0.0.1:8080` is safe. Do not expose to `0.0.0.0` without a reverse proxy + TLS in front.
 - **File Permissions** — `data/identity/` and `data/keystore.enc` must have permission `600` (owner read-only). `setup.sh` handles this automatically on Unix systems.
 - **`authority.bin` and HMAC** — The authority file is HMAC-protected. Do not edit it manually.
@@ -664,7 +654,7 @@ data/
 
 - Use `cargo run --release` or the compiled binary at `target/release/ess-p2p-rs` for production.
 - Set `RUST_LOG=warn` in production to reduce logging overhead.
-- The Ghost Engine automatically manages peer connections and throttling. No manual tuning is required unless you have specific requirements.
+- The Ghost Engine automatically manages peer connections and throttling. No manual tuning is required unless you have specific performance requirements.
 
 ### Backup
 
@@ -689,7 +679,7 @@ data/
 | `hmac` | 0.12 | Message authentication |
 | `pbkdf2` | 0.12 | Password-based key derivation |
 | `sled` | 0.34 | Embedded database (Kademlia store, governance) |
-| `dashmap` | 5.x | Concurrent hash map (peer pubkey store) |
+| `dashmap` | 5.x | Concurrent hash map |
 | `sha2` / `sha3` | 0.10 | Hash functions |
 | `zeroize` | 1.7 | Secure memory zeroization |
 | `tracing` / `tracing-subscriber` | 0.1/0.3 | Structured logging |
@@ -698,5 +688,6 @@ data/
 
 ---
 
-*ESS P2P RS — Backbone Network Node*
+*ESS — Sovereign Network Operating System · Software Layer v1.0*
+*Optimized for Sabelle Black Box · Compatible with VPS, Bare-metal, and Cloud*
 
