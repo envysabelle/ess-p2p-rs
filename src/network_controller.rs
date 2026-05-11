@@ -8,7 +8,7 @@ use crate::ghost_runtime::{GhostActionSink, GhostRuntimeHandle};
 use crate::message::DirectResponse;
 use crate::message::DirectRequest;
 use crate::governance::engine::GovernanceEngine;
-use crate::governance::messages::ActivationCertificate;   // <-- tambahan import
+use crate::governance::messages::ActivationCertificate;
 use crate::network::runtime::types::{Behaviour, OnboardRequest, OnboardResponse};
 use crate::security_runtime::SecurityRuntime;
 use crate::system_event::{SystemEvent, SystemEventKind};
@@ -228,13 +228,11 @@ impl NetworkController {
             }
         };
 
+        // ✅ FIX: Zero‑key fallback dihapus. Jika onion static secret tidak ada, langsung error.
         let local_x25519_sk = self
             .get_onion_static_secret()
             .map(|k| k.static_secret)
-            .unwrap_or_else(|| {
-                tracing::warn!("Onion static secret not set, using zero key as fallback");
-                x25519_dalek::StaticSecret::from([0u8; 32])
-            });
+            .ok_or_else(|| boxed_error("Onion static secret is not initialized"))?;
 
         // [FIX L-18] Tambahkan authority_pubkey: None untuk sementara
         let ctx = RuntimeContext {
