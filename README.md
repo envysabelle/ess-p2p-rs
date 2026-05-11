@@ -1,27 +1,14 @@
-# ESS — Sovereign Network Operating System
-
-> **ESS (Essential Sovereign System)** is not a messaging protocol. ESS is a **Network Operating System** — an autonomous infrastructure layer that enables sovereign, self-healing, and censorship-resistant networks to operate without dependency on public cloud providers, centralized authorities, or any third-party infrastructure.
->
-> This Rust codebase is the **Software Layer** of the ESS ecosystem. It is designed to run on top of **Sabelle Black Box** hardware (Physical Layer), but can be deployed on any VPS, bare-metal server, or cloud environment as a fully operator-controlled **Sovereign IaaS (Infrastructure as a Service)**.
-
----
-
-## What Makes ESS Different?
-
-Most people hear "P2P" and immediately think: *a decentralized chat app*. ESS is not that.
-
-| Category | Common Examples | ESS |
-|---|---|---|
-| **Messaging P2P** | Signal, Session, Briar | ❌ Not this |
-| **File Sharing P2P** | BitTorrent, IPFS | ❌ Not this |
-| **Blockchain P2P** | Bitcoin, Ethereum | ❌ Not this |
-| **Sovereign Infrastructure** | — | ✅ This is ESS |
-
-**P2P in ESS is the transport layer, not the end product.** Running on top of it is a full infrastructure ecosystem: decentralized governance, autonomous routing, immutable audit trails, and node identity management that depends on no single entity.
+<div align="center">
+  <img src="https://envysabelle.com/assets/images/logo.png" alt="ESS Logo" width="180"/>
+  <h1>ESS — Sovereign Network Operating System</h1>
+  <p><em>Autonomous · Self-Healing · Censorship-Resistant · Post-Quantum Ready</em></p>
+</div>
 
 ---
 
 ## The Two Layers of ESS
+
+> Understanding the distinction between hardware and software is the foundation of everything ESS does.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -45,6 +32,27 @@ Most people hear "P2P" and immediately think: *a decentralized chat app*. ESS is
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**ESS (Essential Sovereign System)** is not a messaging protocol. ESS is a **Network Operating System** — an autonomous infrastructure layer that enables sovereign, self-healing, and censorship-resistant networks to operate without dependency on public cloud providers, centralized authorities, or any third-party infrastructure.
+
+This Rust codebase is the **Software Layer** of the ESS ecosystem. It is designed to run on top of **Sabelle Black Box** hardware (Physical Layer), but can be deployed on any VPS, bare-metal server, or cloud environment as a fully operator-controlled **Sovereign IaaS (Infrastructure as a Service)**.
+
+> ESS transforms raw compute (hardware) into a **Sovereign IaaS** environment, where infrastructure services like networking, security, and state consistency are automated by the Ghost Engine.
+
+---
+
+## What Makes ESS Different?
+
+Most people hear "P2P" and immediately think: *a decentralized chat app*. ESS is not that.
+
+| Category | Common Examples | ESS |
+|---|---|---|
+| **Messaging P2P** | Signal, Session, Briar | ❌ Not this |
+| **File Sharing P2P** | BitTorrent, IPFS | ❌ Not this |
+| **Blockchain P2P** | Bitcoin, Ethereum | ❌ Not this |
+| **Sovereign Infrastructure** | — | ✅ This is ESS |
+
+**P2P in ESS is the transport layer, not the end product.** Running on top of it is a full infrastructure ecosystem: decentralized governance, autonomous routing, immutable audit trails, and node identity management that depends on no single entity.
+
 ---
 
 ## Core Capabilities
@@ -52,11 +60,11 @@ Most people hear "P2P" and immediately think: *a decentralized chat app*. ESS is
 | Capability | Description |
 |---|---|
 | **Autonomous Mesh Routing** | libp2p + Kademlia DHT — the network discovers and sustains itself |
-| **Onion Routing** | 3-hop default, ephemeral X25519 ECDH + ChaCha20-Poly1305 per hop, no single point of observation |
-| **Post-Quantum Cryptography** | ML-KEM-1024 (Kyber) hybrid with X25519 via HKDF — resistant to quantum computing attacks |
-| **Ghost Engine** | Autonomous 8-state machine daemon: self-healing, peer management, panic isolation |
+| **Onion Routing** | 3-hop minimum (enforced by `MIN_HOPS = 3`), ephemeral X25519 ECDH + ChaCha20-Poly1305 per hop, no single point of observation |
+| **Post-Quantum Cryptography** | ML-KEM-1024 (Kyber / FIPS 203) hybrid with X25519 via HKDF — resistant to quantum computing attacks |
+| **Ghost Engine** | Autonomous 8-state machine daemon: self-healing, peer management, panic isolation, and network-wide zeroization |
 | **Sovereign Governance** | Decentralized voting among supernodes — network policy is decided collectively, not by a single admin |
-| **CRDT State + Merkle-DAG** | Eventual consistency without a central coordinator + immutable audit trail for every state change |
+| **CRDT State + Merkle-DAG** | Eventual consistency without a central coordinator + immutable forensic trail for every state change |
 | **RBAC + Authority Chain** | 7 role levels, policy distributed via signed ConfigBundle |
 | **Forward Secrecy** | 24-hour key rotation via hash-chain — past sessions cannot be decrypted even if the current key is compromised |
 | **Shamir Secret Sharing** | Threshold scheme (k, n) over GF(2⁸) for distributing critical secrets |
@@ -101,7 +109,7 @@ Most people hear "P2P" and immediately think: *a decentralized chat app*. ESS is
 │                                                                  │
 │  ┌─────────────────┐   ┌──────────────────────────────────────┐  │
 │  │  CRDT State     │   │         Merkle-DAG                   │  │
-│  │  Engine         │   │   Immutable audit trail per          │  │
+│  │  Engine         │   │   Immutable forensic trail per       │  │
 │  │  (5 primitives) │   │   state change                       │  │
 │  └─────────────────┘   └──────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
@@ -117,10 +125,15 @@ Most people hear "P2P" and immediately think: *a decentralized chat app*. ESS is
 │  └─ RequestResponse     (direct messaging)                       │
 │                                                                  │
 │  Onion Routing Layer                                             │
-│  (3-hop • Ephemeral X25519 + ChaCha20-Poly1305 per hop)         │
+│  (3-hop min • Ephemeral X25519 + ChaCha20-Poly1305 per hop)     │
 │                                                                  │
 │  Post-Quantum Hybrid Layer                                       │
-│  (ML-KEM-1024 + X25519 → HKDF)                                  │
+│  (ML-KEM-1024 / FIPS 203 + X25519 → HKDF)                       │
+│                                                                  │
+│  Identity-Centric Networking (Zero-Trust)                        │
+│  No IP-Based Trust: connections are never trusted based on IP    │
+│  or location. Trust is derived solely from Ed25519 identity keys │
+│  and valid Authority-signed activation certificates.             │
 └──────────────────────────────────────────────────────────────────┘
                │
 ┌──────────────▼──────────────────────────────────────────────────┐
@@ -286,7 +299,7 @@ ESS_DASHBOARD_BIND=127.0.0.1:8080
 # GHOST_MIN_AWAKE_CYCLES=10
 
 # ── ONION ROUTING ─────────────────────────────────────────────────────────────
-# ONION_HOPS=3             # 0 = disabled
+# ONION_HOPS=3             # Minimum enforced: MIN_HOPS = 3 (cannot be set below 3)
 # ONION_PAYLOAD_SIZE=1400  # Bytes after padding
 
 # ── LOGGING ───────────────────────────────────────────────────────────────────
@@ -348,15 +361,15 @@ bash run.sh --debug   # debug mode
 
 Configured via `NODE_ROLE` in `.env`. Each role has distinct access rights enforced by `AuthorityManager`:
 
-| Role | Level | Access Rights |
-|---|---|---|
-| `blocked` | 0 | No connections allowed |
-| `observer` | 1 | Connect only, cannot route |
-| `client` | 2 | Connect + basic routing |
-| `standard` | 3 | Connect + route + web traffic |
-| `gateway` | 4 | All standard + gateway access/egress |
-| `validator` | 5 | All gateway + admin update |
-| `supernode` | 6 | Full authority, can update cluster policy |
+| Role | Level | Access Rights | Decision Power |
+|---|---|---|---|
+| `blocked` | 0 | No connections allowed | None |
+| `observer` | 1 | Connect only, cannot route | None |
+| `client` | 2 | Connect + basic routing | None (Consumer) |
+| `standard` | 3 | Connect + route + web traffic | None (Consumer) |
+| `gateway` | 4 | All standard + gateway access/egress | None |
+| `validator` | 5 | All gateway + admin update | Local Consensus |
+| `supernode` | 6 | Full authority, can update cluster policy | **Network Governance (Vote)** |
 
 The role is stored in `data/identity/role.txt` and bound to `EssIdentity` at startup. Role changes issued by an authority supernode are propagated via a cryptographically signed `ConfigBundle`.
 
@@ -381,7 +394,7 @@ Init → Wake → Beacon → Sync → Idle → Sleep
 | `Idle` | No activity, waiting |
 | `Sleep` | Resource-saving mode |
 | `Panic` | Critical condition, self-isolation |
-| `Zeroized` | Self-destruct: all sensitive data is zeroized |
+| `Zeroized` | Self-destruct: all sensitive data is securely zeroized from memory |
 
 ### Ghost Policy
 
@@ -391,6 +404,8 @@ Init → Wake → Beacon → Sync → Idle → Sleep
 | `quarantine_threshold` | < 0.2 | Peer isolation threshold |
 | `panic_on_critical` | true | Auto-panic on critical condition |
 | `drop_on_policy_denial` | true | Drop connection if denied by policy |
+
+- **Anti-Tamper Logic:** Ghost can trigger a network-wide `Panic` state if it detects abnormal consensus partition or hardware compromise, instantly isolating the affected node — before any human operator needs to intervene.
 
 ---
 
@@ -403,7 +418,7 @@ Init → Wake → Beacon → Sync → Idle → Sleep
 | Identity | Ed25519 | `ed25519-dalek`, libp2p keypair |
 | Transport | Noise Protocol + Yamux | libp2p built-in |
 | Onion Routing | Ephemeral X25519 ECDH + ChaCha20-Poly1305 | `x25519-dalek`, `chacha20poly1305` |
-| Post-Quantum | ML-KEM-1024 (Kyber) + X25519 hybrid | `ml-kem` + HKDF-SHA3-256 |
+| Post-Quantum | ML-KEM-1024 (Kyber / **FIPS 203**) + X25519 hybrid | `ml-kem` + HKDF-SHA3-256 |
 | Keystore | AES-256-GCM + PBKDF2-SHA256 | `aes-gcm`, `pbkdf2` |
 | Secret Sharing | Shamir GF(2⁸) threshold | Custom in `sss.rs` |
 | Message Auth | HMAC-SHA256 | `hmac` + `sha2` |
@@ -411,7 +426,7 @@ Init → Wake → Beacon → Sync → Idle → Sleep
 
 ### Onion Routing (`onion.rs`)
 
-Each message passes through 3 hops by default:
+Each message passes through a **minimum of 3 hops** (enforced via `MIN_HOPS = 3` — users cannot configure below this threshold, which would risk metadata leakage):
 
 1. Sender generates an ephemeral X25519 keypair per hop
 2. ECDH between the ephemeral private key + recipient hop's X25519 public key → shared secret
@@ -436,7 +451,7 @@ Past seeds cannot be computed from the current seed (backward secrecy). The Peer
 
 ### Post-Quantum (`pqc.rs`)
 
-Hybrid key exchange using ML-KEM-1024 + X25519 with HKDF:
+Hybrid key exchange using **ML-KEM-1024 (standardized as FIPS 203)** + X25519 with HKDF. ESS follows the latest NIST post-quantum standard, making it future-proof against quantum computing attacks:
 
 ```
 final_key = HKDF(mlkem_shared_secret || x25519_shared_secret)
@@ -501,6 +516,9 @@ MerkleNode {
 ```
 
 The buffer is limited to 1024 nodes (circular). Used for verifying change history and detecting network partitions.
+
+- **Why both CRDT and Merkle-DAG?** CRDT handles data convergence across nodes without coordination. The Merkle-DAG complements it by providing an **immutable forensic trail**, allowing operators to verify *who changed what and when* across the entire mesh — something CRDT alone cannot answer.
+- **Auditability:** Every state transition is cryptographically chained, making retroactive tampering detectable.
 
 ---
 
@@ -674,7 +692,7 @@ data/
 | `x25519-dalek` | 2.x | X25519 ECDH (onion routing) |
 | `chacha20poly1305` | 0.10 | AEAD encryption (onion) |
 | `aes-gcm` | 0.10 | AEAD encryption (keystore) |
-| `ml-kem` | 0.3 | ML-KEM-1024 post-quantum |
+| `ml-kem` | 0.3 | ML-KEM-1024 / FIPS 203 post-quantum |
 | `hkdf` | 0.12 | Key derivation |
 | `hmac` | 0.12 | Message authentication |
 | `pbkdf2` | 0.12 | Password-based key derivation |
