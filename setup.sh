@@ -99,6 +99,16 @@ BOOTSTRAP_P2P_MULTIADDRS=
 # hapus data/authority.bin, lalu run lagi.
 AUTHORITY_SUPERNODES=
 
+# ── Compute Layer ──────────────────────────────────────────────────────────
+# Aktifkan WASM runtime (default: false untuk backward compat)
+ESS_COMPUTE_ENABLED=false
+
+# Maksimum job yang berjalan bersamaan di node ini
+ESS_COMPUTE_MAX_JOBS=4
+
+# Apakah node ini menerima job dari node lain di jaringan
+ESS_COMPUTE_ACCEPT_REMOTE=true
+
 # DASHBOARD
 ESS_DASHBOARD_BIND=127.0.0.1:8080
 # ESS_DASHBOARD_TOKEN=ganti-dengan-token-rahasia

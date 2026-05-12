@@ -35,6 +35,9 @@ mod keystore;
 mod merkle_dag;
 mod id_rotation;
 
+// ── Compute Layer (NEW) ──────────────────────────────────────────────────────
+mod compute;
+
 use std::{
     env, error::Error, fs,
     io,
@@ -71,6 +74,13 @@ use crate::config::{ConfigResponse, NetworkConfig};
 use crate::onboarding::{OnboardingManager, LocalProfile};
 use libp2p::identity::Keypair;
 use libp2p::multiaddr::Protocol;
+
+// ── Compute Layer use (NEW) ──────────────────────────────────────────────────
+use compute::{
+    store::ComputeStore,
+    scheduler::{spawn_scheduler, SchedulerConfig},
+    executor::WasmEngine,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LifecyclePhase {
@@ -170,6 +180,58 @@ impl Lifecycle {
                 }
             };
 
+            // ── INISIALISASI COMPUTE LAYER ──────────────────────────────────────────
+            let authority_arc = Arc::new(ctx.authority.clone());
+            let compute_handle = if std::env::var("ESS_COMPUTE_ENABLED")
+                .unwrap_or_else(|_| "false".into())
+                .eq_ignore_ascii_case("true")
+            {
+                info!("[BOOT] Initializing Compute Layer (WASM Runtime)...");
+
+                // Buka atau buat compute store
+                match ComputeStore::open() {
+                    Ok(store) => {
+                        let store = Arc::new(store);
+
+                        // Init WASM engine (JIT compiler)
+                        match WasmEngine::new() {
+                            Ok(engine) => {
+                                let sched_config = SchedulerConfig {
+                                    max_concurrent_jobs: std::env::var("ESS_COMPUTE_MAX_JOBS")
+                                        .ok()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(4),
+                                    poll_interval_ms: 500,
+                                    accept_remote_jobs: true,
+                                };
+
+                                let handle = spawn_scheduler(
+                                    sched_config,
+                                    store,
+                                    engine,
+                                    authority_arc,
+                                    ctx.ess.peer_id().to_string(),
+                                );
+
+                                info!("[BOOT] Compute Layer OK — WASM runtime aktif");
+                                Some(handle)
+                            }
+                            Err(e) => {
+                                error!("[BOOT] Gagal init WASM engine: {}. Compute layer dinonaktifkan.", e);
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("[BOOT] Gagal buka compute store: {}. Compute layer dinonaktifkan.", e);
+                        None
+                    }
+                }
+            } else {
+                info!("[BOOT] Compute Layer dinonaktifkan (set ESS_COMPUTE_ENABLED=true untuk mengaktifkan)");
+                None
+            };
+
             let autonomous_loop = ControlLoop::new(
                 ctx.controller.clone(),
                 ctx.world_state.clone(),
@@ -178,6 +240,7 @@ impl Lifecycle {
                 ctx.world_store.clone(),
                 ctx.event_rx,
                 ctx.dashboard_tx.clone(),
+                compute_handle,   // <-- diteruskan
             );
 
             let control_handle = tokio::spawn(async move { autonomous_loop.run().await; });

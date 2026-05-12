@@ -18,21 +18,33 @@ mod peer_id_serde {
 pub enum SystemEventKind {
     PeerConnected { #[serde(with = "peer_id_serde")] peer_id: PeerId },
     PeerDisconnected { #[serde(with = "peer_id_serde")] peer_id: PeerId },
-    
+
     // 🔥 FIX E0026 & E0027: Nama field disesuaikan jadi 'latency' agar Ghost Policy happy
     HighLatency { #[serde(with = "peer_id_serde")] peer_id: PeerId, latency: f64 },
-    
+
     // 🔥 FIX E0599: Tambahkan varian yang dicari Ghost Engine
     SecurityReject { #[serde(with = "peer_id_serde")] peer_id: PeerId, reason: String },
     AnomalyDetected { reason: String },
     RoutePressure { namespace: String },
-    
+
     AuthorityViolation { #[serde(with = "peer_id_serde")] peer_id: PeerId, action: Action },
     GhostDecisionExecuted { decision: String, target: String },
     WorldStateSynced { revision: u64 },
     SyncCompleted,
     GhostRecommendation { signal: String },
     GatewayAudit { #[serde(with = "peer_id_serde")] peer_id: PeerId, method: String, allowed: bool },
+
+    // ── Compute Layer Events (NEW) ──────────────────────────────────────────
+    /// Job baru masuk ke antrian
+    ComputeJobQueued { job_id: String, submitter: String },
+    /// Job mulai dieksekusi
+    ComputeJobStarted { job_id: String },
+    /// Job selesai dengan sukses
+    ComputeJobCompleted { job_id: String, exec_time_ms: u64 },
+    /// Job gagal
+    ComputeJobFailed { job_id: String, reason: String },
+    /// Job dibatalkan
+    ComputeJobCancelled { job_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

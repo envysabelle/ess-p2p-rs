@@ -4,7 +4,10 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use serde::{Deserialize, Serialize};
-use log::debug;
+use log::{debug, info};
+
+// ── Compute Layer types (NEW) ────────────────────────────────────────────────
+use crate::compute::types::ComputeResult;
 
 // ==========================================
 // 1. DATA MODELS
@@ -24,6 +27,8 @@ pub enum DashboardBridgeInput {
     Route(RouteInfo),
     Log(LogEvent),
     Telemetry(TelemetryUpdate),
+    /// Hasil eksekusi komputasi (job_id, ComputeResult)
+    ComputeJobResult(String, ComputeResult),
 }
 
 // ==========================================
@@ -100,6 +105,12 @@ pub fn spawn_dashboard_bridge(
                     health.state = "active".to_string();
                     health.health_level = "healthy".to_string();
                     store.upsert_node_health(health).await;
+                }
+                DashboardBridgeInput::ComputeJobResult(job_id, result) => {
+                    info!(
+                        "[BRIDGE] Compute job completed: {} in {}ms (fuel: {})",
+                        job_id, result.exec_time_ms, result.fuel_consumed
+                    );
                 }
             }
 

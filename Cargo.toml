@@ -66,3 +66,12 @@ parking_lot = "0.12"
 
 # Post‑quantum experiment (opsional)
 ml-kem = { version = "0.3", features = ["getrandom"] }
+
+# Compute Layer
+wasmtime = { version = "18", default-features = false, features = ["async", "cranelift"] }
+wasmtime-wasi = "18"                     # <-- default features ON, sedia WasiCtxBuilder
+thiserror = "1"
+num_cpus = "1"
+tokio-util = { version = "0.7", features = ["time"] }
+anyhow = "1"
+wasi-common = "18"

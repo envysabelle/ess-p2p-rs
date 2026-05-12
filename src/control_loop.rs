@@ -11,6 +11,9 @@ use crate::id_rotation;
 use crate::crdt_state::CrdtSyncMessage;
 use crate::pqc;
 
+// ── Compute Layer (NEW) ──────────────────────────────────────────────────
+use crate::compute::scheduler::{ComputeEvent, ComputeSchedulerHandle};
+
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{self, Duration};
@@ -25,6 +28,9 @@ pub struct ControlLoop {
     event_rx: mpsc::Receiver<SystemEvent>,
     dashboard_tx: mpsc::Sender<DashboardBridgeInput>,
     last_rotation_epoch: u64,
+
+    /// Handle ke compute scheduler (None jika node tidak punya compute layer)
+    compute_handle: Option<ComputeSchedulerHandle>,
 }
 
 impl ControlLoop {
@@ -36,6 +42,7 @@ impl ControlLoop {
         world_store: Arc<WorldStateStore>,
         event_rx: mpsc::Receiver<SystemEvent>,
         dashboard_tx: mpsc::Sender<DashboardBridgeInput>,
+        compute_handle: Option<ComputeSchedulerHandle>,
     ) -> Self {
         Self {
             controller,
@@ -46,6 +53,7 @@ impl ControlLoop {
             event_rx,
             dashboard_tx,
             last_rotation_epoch: id_rotation::current_epoch(),
+            compute_handle,
         }
     }
 
@@ -54,40 +62,44 @@ impl ControlLoop {
 
         let mut ticker = time::interval(Duration::from_secs(30));
         let mut persist_ticker = time::interval(Duration::from_secs(300));
-
-        // CRDT Sync Interval
         let mut crdt_sync_interval = time::interval(Duration::from_secs(120));
-
-        // Key Rotation Check (setiap jam)
         let mut rotation_check_interval = time::interval(Duration::from_secs(3600));
-
-        // PQC Handshake interval (setiap 10 menit) — Patch 4
         let mut pqc_handshake_interval = time::interval(Duration::from_secs(600));
+
+        // ── Subscribe ke compute events jika ada ─────────────────────────
+        let mut compute_events = self
+            .compute_handle
+            .as_ref()
+            .map(|h| h.subscribe_events());
 
         loop {
             tokio::select! {
                 Some(event) = self.event_rx.recv() => {
                     self.handle_system_event(event).await;
                 }
-
                 _ = ticker.tick() => {
                     self.on_ticker_tick().await;
                 }
-
                 _ = persist_ticker.tick() => {
                     self.on_persist_tick().await;
                 }
-
                 _ = crdt_sync_interval.tick() => {
                     self.on_crdt_sync_tick().await;
                 }
-
                 _ = rotation_check_interval.tick() => {
                     self.on_rotation_check_tick().await;
                 }
-
                 _ = pqc_handshake_interval.tick() => {
                     self.on_pqc_handshake_tick().await;
+                }
+                Some(Ok(ce)) = async {
+                    if let Some(rx) = &mut compute_events {
+                        Some(rx.recv().await)
+                    } else {
+                        None
+                    }
+                } => {
+                    self.handle_compute_event(ce).await;
                 }
             }
         }
@@ -132,8 +144,9 @@ impl ControlLoop {
                 },
             ));
 
-            // ✅ Patch: role dinamis dari security, bukan hardcoded "supernode"
-            let role = self.controller.get_security()
+            let role = self
+                .controller
+                .get_security()
                 .map(|s| s.current_role().as_str().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
 
@@ -173,9 +186,6 @@ impl ControlLoop {
         }
     }
 
-    // -----------------------------------------------------------------
-    //  CRDT broadcast — now using bincode binary payload
-    // -----------------------------------------------------------------
     async fn on_crdt_sync_tick(&self) {
         if let Some(crdt) = self.controller.crdt_world() {
             let state = crdt.read().await;
@@ -183,21 +193,21 @@ impl ControlLoop {
             let node_id = self.controller.peer_id().to_string();
             let sync_msg = CrdtSyncMessage::new(node_id, state.clone());
 
-            let peers = state.peers.connected_peers()
+            let peers = state
+                .peers
+                .connected_peers()
                 .iter()
                 .map(|p| p.peer_id.clone())
                 .collect::<Vec<_>>();
             drop(state);
 
-            // Gunakan bincode untuk serialisasi message
             if let Ok(payload) = bincode::serialize(&sync_msg) {
                 for peer_id_str in &peers {
                     if let Ok(peer_id) = peer_id_str.parse::<libp2p::PeerId>() {
-                        let _ = self.controller.send_typed_message(
-                            peer_id,
-                            "crdt_sync",
-                            payload.clone(),
-                        ).await;
+                        let _ = self
+                            .controller
+                            .send_typed_message(peer_id, "crdt_sync", payload.clone())
+                            .await;
                     }
                 }
                 debug!(
@@ -209,30 +219,26 @@ impl ControlLoop {
         }
     }
 
-    // -----------------------------------------------------------------
-    //  ID rotation check — Patch 4: expanded logic
-    // -----------------------------------------------------------------
     async fn on_rotation_check_tick(&mut self) {
         let secs_to_rotation = id_rotation::next_rotation_in_secs();
         let current_epoch = id_rotation::current_epoch();
 
-        debug!("[ID-ROTATION] Current epoch: {}, next rotation in {}s", current_epoch, secs_to_rotation);
+        debug!(
+            "[ID-ROTATION] Current epoch: {}, next rotation in {}s",
+            current_epoch, secs_to_rotation
+        );
 
         if id_rotation::should_rotate(self.last_rotation_epoch) {
             info!(
                 "[ID-ROTATION] 🔄 New epoch {} detected (was {}). Triggering network readiness broadcast.",
-                current_epoch,
-                self.last_rotation_epoch
+                current_epoch, self.last_rotation_epoch
             );
 
-            // Notifikasi ghost engine
             let _ = self.ghost.trigger_beacon().await;
             let _ = self.ghost.assess().await;
 
-            // Update last epoch
             self.last_rotation_epoch = current_epoch;
 
-            // Kirim sinyal ke dashboard
             let _ = self.dashboard_tx.try_send(
                 crate::dashboard_bridge::DashboardBridgeInput::Log(
                     crate::dashboard::LogEvent {
@@ -241,8 +247,8 @@ impl ControlLoop {
                         level: "info".to_string(),
                         message: format!("[ID-ROTATION] Rotated to epoch {}", current_epoch),
                         event: "id_rotation".into(),
-                    }
-                )
+                    },
+                ),
             );
         } else if secs_to_rotation < 3600 {
             info!(
@@ -253,13 +259,9 @@ impl ControlLoop {
         }
     }
 
-    // -----------------------------------------------------------------
-    //  PQC handshake — now sending binary Vec<u8>
-    // -----------------------------------------------------------------
     async fn on_pqc_handshake_tick(&self) {
         let peer_id_str = self.controller.peer_id().to_string();
 
-        // Generate keypair PQC untuk node ini
         let our_keypair = pqc::HybridKeyPair::generate(&peer_id_str);
         let our_pubkey_bin = match bincode::serialize(&our_keypair.public_key) {
             Ok(v) => v,
@@ -269,7 +271,6 @@ impl ControlLoop {
             }
         };
 
-        // Ambil daftar trusted peers yang terhubung
         let trusted_peers: Vec<String> = {
             if let Ok(ws) = self.world_state.read() {
                 ws.peer_registry
@@ -287,12 +288,15 @@ impl ControlLoop {
             return;
         }
 
-        info!("[PQC] Initiating handshake with {} trusted peer(s).", trusted_peers.len());
+        info!(
+            "[PQC] Initiating handshake with {} trusted peer(s).",
+            trusted_peers.len()
+        );
 
         for peer_id_str in trusted_peers {
             if let Ok(peer_id) = peer_id_str.parse::<libp2p::PeerId>() {
-                // send_direct_message menerima Vec<u8>
-                match self.controller
+                match self
+                    .controller
                     .send_direct_message(peer_id, our_pubkey_bin.clone())
                     .await
                 {
@@ -302,17 +306,21 @@ impl ControlLoop {
                                 match our_keypair.decapsulate(&ciphertext) {
                                     Ok(session_key) => {
                                         info!(
-                                            "[PQC] ✅ Session key established with peer {}. \
-                                             Key fingerprint: {}",
+                                            "[PQC] ✅ Session key established with peer {}. Key fingerprint: {}",
                                             peer_id,
                                             hex::encode(&session_key.as_bytes()[..8])
                                         );
                                     }
-                                    Err(e) => warn!("[PQC] Decapsulation failed for {}: {}", peer_id, e),
+                                    Err(e) => {
+                                        warn!("[PQC] Decapsulation failed for {}: {}", peer_id, e)
+                                    }
                                 }
                             }
                             Err(_) => {
-                                debug!("[PQC] Peer {} returned non-PQC response (may not support yet).", peer_id);
+                                debug!(
+                                    "[PQC] Peer {} returned non-PQC response (may not support yet).",
+                                    peer_id
+                                );
                             }
                         }
                     }
@@ -322,9 +330,6 @@ impl ControlLoop {
         }
     }
 
-    // -----------------------------------------------------------------
-    //  System event handler
-    // -----------------------------------------------------------------
     async fn handle_system_event(&self, event: SystemEvent) {
         self.controller.update_world_state(|w: &mut WorldState| {
             w.observe_signal(format!("loop:{:?}", event.kind));
@@ -334,11 +339,17 @@ impl ControlLoop {
             SystemEventKind::PeerConnected { peer_id } => {
                 info!("[CONTROL-LOOP] Sovereign Link established: {}", peer_id);
                 self.controller.update_peer_success(peer_id, 45.0);
-                let _ = self.ghost_bridge.observe_peer_connected(peer_id.to_string()).await;
+                let _ = self
+                    .ghost_bridge
+                    .observe_peer_connected(peer_id.to_string())
+                    .await;
             }
             SystemEventKind::PeerDisconnected { peer_id } => {
                 warn!("[CONTROL-LOOP] Sovereign Link severed: {}", peer_id);
-                let _ = self.ghost_bridge.observe_peer_disconnected(peer_id.to_string()).await;
+                let _ = self
+                    .ghost_bridge
+                    .observe_peer_disconnected(peer_id.to_string())
+                    .await;
                 let _ = self.ghost.trigger_beacon().await;
             }
             SystemEventKind::SecurityReject { peer_id, reason } => {
@@ -393,5 +404,40 @@ impl ControlLoop {
         }
 
         let _ = self.ghost.publish_event(&event.kind).await;
+    }
+
+    // ── Compute event handler (FIXED) ────────────────────────────────────
+    async fn handle_compute_event(&self, event: ComputeEvent) {
+        match event {
+            ComputeEvent::JobQueued(id) => {
+                let id_str = id.0.clone();
+                info!("[CONTROL-LOOP] Compute job queued: {}", id_str);
+                if let Ok(mut ws) = self.world_state.write() {
+                    ws.observe_signal(format!("compute:job_queued:{}", id_str));
+                }
+            }
+            ComputeEvent::JobCompleted(id, result) => {
+                info!(
+                    "[CONTROL-LOOP] Compute job completed: {} in {}ms (fuel: {})",
+                    id.0, result.exec_time_ms, result.fuel_consumed
+                );
+                let _ = self
+                    .dashboard_tx
+                    .send(DashboardBridgeInput::ComputeJobResult(
+                        id.0.clone(),
+                        result,
+                    ))
+                    .await;
+            }
+            ComputeEvent::JobFailed(id, reason) => {
+                warn!("[CONTROL-LOOP] Compute job failed: {} — {}", id.0, reason);
+                let kind = SystemEventKind::ComputeJobFailed {
+                    job_id: id.0.clone(),
+                    reason,
+                };
+                let _ = self.ghost.publish_event(&kind).await;
+            }
+            _ => {}
+        }
     }
 }
