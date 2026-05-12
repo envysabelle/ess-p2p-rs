@@ -1,3 +1,4 @@
+// src/network/runtime/events.rs
 use crate::gateway::GatewayResponse;
 use crate::web::{WebResponse, ServiceRecord, ServiceRegistry, parse_ess_uri, can_publish_service};
 use crate::config::{ConfigBundle, ConfigRequest, ConfigResponse};
@@ -1083,14 +1084,17 @@ async fn handle_direct_request(
         return;
     }
 
-    // ── Compute message handler (PATCH #2) ────────────────────────────────
+    // ── Compute message handler (PATCH #2 – updated untuk parameter store) ─
     if request.kind == "compute" {
         let handle_opt = controller.get_compute_handle();
         if let Some(scheduler) = handle_opt {
+            // Ambil compute store dari controller jika tersedia
+            let store_opt = controller.get_compute_store();
             let reply = network::handle_incoming_compute_message(
                 body,
                 &peer.to_string(),
                 &scheduler,
+                store_opt.as_deref(),
             ).await;
 
             let reply_bytes = match reply {

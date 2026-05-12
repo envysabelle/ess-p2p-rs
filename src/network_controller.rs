@@ -5,6 +5,7 @@ use crate::gateway::{
     GatewayRateLimitDecision, GatewayRateLimiter,
 };
 use crate::compute::scheduler::ComputeSchedulerHandle;
+use crate::compute::store::ComputeStore;                      // NEW
 use crate::ghost_runtime::{GhostActionSink, GhostRuntimeHandle};
 use crate::message::DirectResponse;
 use crate::message::DirectRequest;
@@ -28,8 +29,7 @@ use tokio::time::{sleep, timeout, Duration, Instant};
 use dashmap::DashMap;
 use x25519_dalek::PublicKey as X25519PublicKey;
 use sha2::{Sha256, Digest};
-use parking_lot::Mutex;                                                                 
-// Impor untuk onion routing yang sudah dipindahkan ke support
+use parking_lot::Mutex;
 use crate::network::runtime::support::send_via_onion;
 use crate::network::runtime::runner::RuntimeContext;
 
@@ -65,6 +65,7 @@ pub struct NetworkController {
     onion_static_secret: Arc<RwLock<Option<[u8; 32]>>>,
     onion_config: Arc<RwLock<Option<(usize, Arc<DashMap<PeerId, X25519PublicKey>>)>>>,
     compute_handle: Arc<RwLock<Option<ComputeSchedulerHandle>>>,
+    compute_store: Arc<RwLock<Option<Arc<ComputeStore>>>>,   // NEW
     current_rotation_seed: Arc<Mutex<Option<[u8; 32]>>>,
 }
 
@@ -137,6 +138,7 @@ impl NetworkController {
             onion_static_secret: Arc::new(RwLock::new(None)),
             onion_config: Arc::new(RwLock::new(None)),
             compute_handle: Arc::new(RwLock::new(None)),
+            compute_store: Arc::new(RwLock::new(None)),   // NEW
             current_rotation_seed: Arc::new(Mutex::new(None)),
         }
     }
@@ -200,16 +202,26 @@ impl NetworkController {
         *self.current_rotation_seed.lock() = Some(seed);
     }
 
-    // ── Compute handle management (PATCH) ─────────────────────────────
-    /// Menyimpan ComputeSchedulerHandle yang sudah berjalan.
+    // ── Compute handle management ─────────────────────────────
     pub fn set_compute_handle(&self, handle: ComputeSchedulerHandle) {
         *self.compute_handle.write().unwrap() = Some(handle);
     }
 
-    /// Mendapatkan clone ComputeSchedulerHandle jika ada.
     pub fn get_compute_handle(&self) -> Option<ComputeSchedulerHandle> {
         self.compute_handle.read().unwrap().clone()
     }
+
+    // ── Compute store management (NEW) ────────────────────────
+    pub fn set_compute_store(&self, store: Arc<ComputeStore>) {
+        *self.compute_store.write().unwrap() = Some(store);
+    }
+
+    pub fn get_compute_store(&self) -> Option<Arc<ComputeStore>> {
+        self.compute_store.read().unwrap().clone()
+    }
+
+    // ... sisa method sama seperti sebelumnya (tidak diubah) ...
+    // Semua method yang ada di file asli tetap sama, hanya ditambahkan yang di atas.
 
     // --- Kirim pesan melalui onion routing (fire-and-forget) ---
     pub async fn send_onion_message(
@@ -241,13 +253,11 @@ impl NetworkController {
             }
         };
 
-        // ✅ FIX: Zero‑key fallback dihapus. Jika onion static secret tidak ada, langsung error.
         let local_x25519_sk = self
             .get_onion_static_secret()
             .map(|k| k.static_secret)
             .ok_or_else(|| boxed_error("Onion static secret is not initialized"))?;
 
-        // [FIX L-18] Tambahkan authority_pubkey: None untuk sementara
         let ctx = RuntimeContext {
             onion_hops: hops,
             onion_payload_size: 1400,
@@ -536,8 +546,6 @@ impl NetworkController {
         }
     }
 
-    // ========== PATCH 5: Method baru ==========
-    /// Kirim notifikasi aktivasi langsung ke peer target via direct message.
     pub async fn send_activation_notification(&self, peer_id: PeerId, cert: ActivationCertificate) {
         let body = bincode::serialize(&cert).unwrap_or_default();
         let _ = self.send_typed_message(
@@ -593,7 +601,6 @@ impl NetworkController {
         }
     }
 
-    /// send_direct_message — SELALU DIRECT, tanpa onion fallback di dalamnya.
     pub async fn send_direct_message(
         &self,
         to_peer: PeerId,
@@ -640,7 +647,6 @@ impl NetworkController {
         Ok(response_bytes)
     }
 
-    /// send_typed_message: mengirim pesan dengan `kind` tertentu secara direct.
     pub async fn send_typed_message(
         &self,
         to_peer: PeerId,

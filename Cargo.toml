@@ -75,3 +75,7 @@ num_cpus = "1"
 tokio-util = { version = "0.7", features = ["time"] }
 anyhow = "1"
 wasi-common = "18"
+
+# ── Dev dependencies (hanya untuk testing / build script) ─────────────
+[dev-dependencies]
+wat = "1"   # untuk mengkompilasi hello.wat → hello.wasm di test/fixtures

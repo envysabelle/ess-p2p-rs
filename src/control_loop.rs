@@ -15,8 +15,9 @@ use crate::pqc;
 use crate::compute::scheduler::{ComputeEvent, ComputeSchedulerHandle};
 
 use std::sync::Arc;
+use std::env;
 use tokio::sync::mpsc;
-use tokio::time::{self, Duration};
+use tokio::time::{self, Duration, Interval};
 use log::{info, warn, debug, error};
 
 pub struct ControlLoop {
@@ -31,6 +32,9 @@ pub struct ControlLoop {
 
     /// Handle ke compute scheduler (None jika node tidak punya compute layer)
     compute_handle: Option<ComputeSchedulerHandle>,
+
+    /// Interval publikasi kapasitas komputasi ke DHT
+    capacity_publish_interval: Interval,
 }
 
 impl ControlLoop {
@@ -44,6 +48,12 @@ impl ControlLoop {
         dashboard_tx: mpsc::Sender<DashboardBridgeInput>,
         compute_handle: Option<ComputeSchedulerHandle>,
     ) -> Self {
+        // Interval publish kapasitas, bisa diatur lewat env var, default 120 detik
+        let capacity_publish_secs: u64 = env::var("ESS_COMPUTE_CAPACITY_PUBLISH_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(120);
+
         Self {
             controller,
             world_state,
@@ -54,6 +64,7 @@ impl ControlLoop {
             dashboard_tx,
             last_rotation_epoch: id_rotation::current_epoch(),
             compute_handle,
+            capacity_publish_interval: time::interval(Duration::from_secs(capacity_publish_secs)),
         }
     }
 
@@ -91,6 +102,13 @@ impl ControlLoop {
                 }
                 _ = pqc_handshake_interval.tick() => {
                     self.on_pqc_handshake_tick().await;
+                }
+                // ── Publish kapasitas komputasi secara berkala ────────────
+                _ = self.capacity_publish_interval.tick() => {
+                    if let Some(ref handle) = self.compute_handle {
+                        let peer_id = self.controller.peer_id().to_string();
+                        handle.publish_capacity(&peer_id, &self.controller).await;
+                    }
                 }
                 Some(Ok(ce)) = async {
                     if let Some(rx) = &mut compute_events {

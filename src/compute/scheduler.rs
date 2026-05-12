@@ -11,8 +11,10 @@
 
 use crate::authority::{Action, AuthorityManager};
 use crate::compute::executor::WasmEngine;
+use crate::compute::network::NodeCapacity;
 use crate::compute::store::ComputeStore;
 use crate::compute::types::{ComputeError, ComputeJobSpec, ComputeResult, JobId};
+use crate::network_controller::NetworkController;
 
 use dashmap::DashMap;
 use libp2p::PeerId;
@@ -95,6 +97,25 @@ impl ComputeSchedulerHandle {
     pub fn running_count(&self) -> usize {
         self.running_jobs.len()
     }
+
+    /// Publikasikan kapasitas node ke DHT (dipanggil oleh ControlLoop secara berkala).
+    pub async fn publish_capacity(
+        &self,
+        peer_id: &str,
+        controller: &NetworkController,
+    ) {
+        let capacity = NodeCapacity::current(peer_id, self);
+        let msg = crate::compute::network::ComputeMessage::Capacity(capacity);
+        let payload = serde_json::to_vec(&msg).unwrap_or_default();
+        // Ambil handle swarm dan simpan record di Kademlia DHT
+        let handle = controller.swarm_handle();
+        let mut guard = handle.lock();
+        if let Some(swarm) = guard.as_mut() {
+            let key = format!("compute_capacity:{}", peer_id);
+            let record = libp2p::kad::Record::new(libp2p::kad::RecordKey::new(&key), payload);
+            let _ = swarm.behaviour_mut().kademlia.put_record(record, libp2p::kad::Quorum::One);
+        }
+    }
 }
 
 /// Spawn scheduler sebagai background task.
@@ -131,10 +152,10 @@ pub fn spawn_scheduler(
             tokio::select! {
                 // ── Terima job submission baru ──────────────────────────────
                 Some(spec) = submit_rx.recv() => {
-                    // Validasi authority: hanya peer dengan role >= Client
+                    // Validasi authority: hanya peer dengan role >= Client yang boleh ComputeSubmit
                     let peer_id = spec.submitter_peer_id.parse::<PeerId>();
                     let allowed = match peer_id {
-                        Ok(pid) => authority_clone.is_allowed(&pid, Action::Connect),
+                        Ok(pid) => authority_clone.is_allowed(&pid, Action::ComputeSubmit),
                         Err(_) => false,
                     };
 
@@ -146,6 +167,19 @@ pub fn spawn_scheduler(
                         let _ = event_tx_clone.send(ComputeEvent::JobFailed(
                             spec.job_id.clone(),
                             "authority denied".into(),
+                        ));
+                        continue;
+                    }
+
+                    // Verifikasi signature job (production-ready)
+                    if let Err(e) = spec.validate() {
+                        warn!(
+                            "[COMPUTE-SCHED] Job {} signature invalid: {}. Discarding.",
+                            spec.job_id.0, e
+                        );
+                        let _ = event_tx_clone.send(ComputeEvent::JobFailed(
+                            spec.job_id,
+                            format!("invalid signature: {}", e),
                         ));
                         continue;
                     }
@@ -204,7 +238,7 @@ pub fn spawn_scheduler(
                                 info!("[COMPUTE-SCHED] Mulai eksekusi job {}", job_id.0);
                                 let _ = events.send(ComputeEvent::JobStarted(job_id.clone()));
 
-                                // Perbaikan: kirim executor_peer_id ke engine.execute
+                                // Kirim executor_peer_id ke engine.execute
                                 let result = engine_for_job.execute(spec, exec_peer).await;
                                 running.remove(job_id.0.as_str());
 

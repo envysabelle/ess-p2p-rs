@@ -1,13 +1,6 @@
 // src/compute/network.rs
-//! Protocol P2P untuk distribusi compute jobs antar node.
-//!
-//! Message types yang ditambahkan ke ESS P2P protocol:
-//!   ComputeSubmit   → kirim job ke node tertentu
-//!   ComputeResult   → kirim balik hasil ke submitter
-//!   ComputeCancel   → batalkan job yang sedang berjalan
-//!   ComputeQuery    → tanya status sebuah job
-//!   ComputeCapacity → broadcast kapasitas komputasi node ini                          
 use crate::compute::scheduler::ComputeSchedulerHandle;
+use crate::compute::store::ComputeStore;
 use crate::compute::types::{ComputeJobSpec, ComputeResult, JobId};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,42 +10,21 @@ use tracing::{debug, info, warn};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum ComputeMessage {
-    /// Submitter mengirim job ke executor node
     Submit(ComputeJobSpec),
-
-    /// Executor mengirim hasil ke submitter
     Result(ComputeResult),
-                                                                                            
-    /// Request untuk membatalkan sebuah job
     Cancel { job_id: String },
-                                                                                            
-    /// Query status sebuah job
     StatusQuery { job_id: String },
-
-    /// Jawaban status query
-    StatusReply {
-        job_id: String,
-        status: String,    // "queued" | "running" | "completed" | "failed" | "not_found"
-        exec_time_ms: Option<u64>,
-    },
-
-    /// Node mengumumkan kapasitas komputasinya (dikirim via Kademlia DHT)
+    StatusReply { job_id: String, status: String, exec_time_ms: Option<u64> },
     Capacity(NodeCapacity),
 }
 
-/// Kapasitas komputasi sebuah node (di-publish ke DHT)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeCapacity {
     pub peer_id: String,
-    /// Jumlah core CPU yang tersedia
     pub available_cores: u32,
-    /// Memori yang tersedia dalam MB
     pub available_memory_mb: u64,
-    /// Antrian jobs yang sedang diproses
     pub queue_depth: usize,
-    /// Apakah node menerima job dari luar
     pub accepting_jobs: bool,
-    /// Timestamp
     pub updated_at: u64,
 }
 
@@ -62,7 +34,7 @@ impl NodeCapacity {
         Self {
             peer_id: peer_id.to_string(),
             available_cores: cores.saturating_sub(scheduler.running_count() as u32),
-            available_memory_mb: 256, // TODO: baca dari /proc/meminfo di Linux
+            available_memory_mb: 256,
             queue_depth: scheduler.running_count(),
             accepting_jobs: scheduler.running_count() < cores as usize,
             updated_at: SystemTime::now()
@@ -73,15 +45,12 @@ impl NodeCapacity {
     }
 }
 
-/// Handler untuk pesan compute yang masuk dari jaringan P2P.
-/// Dipanggil dari network_controller saat ada DirectRequest dengan kind="compute"
-///
-/// Signature: menerima raw_payload, sender_peer_id, dan handle scheduler
-/// Langsung dari events.rs
+/// Handler utama (digunakan oleh events.rs) – sekarang menerima store opsional.
 pub async fn handle_incoming_compute_message(
     raw_payload: &[u8],
     sender_peer_id: &str,
     scheduler: &ComputeSchedulerHandle,
+    store: Option<&ComputeStore>,
 ) -> Option<ComputeMessage> {
     let msg: ComputeMessage = match serde_json::from_slice(raw_payload) {
         Ok(m) => m,
@@ -113,21 +82,38 @@ pub async fn handle_incoming_compute_message(
                 }
             }
         }
-
         ComputeMessage::Cancel { job_id } => {
             info!("[COMPUTE-NET] Cancel job {} dari {}", job_id, sender_peer_id);
             let _ = scheduler.cancel_job(JobId(job_id.clone())).await;
         }
-
         ComputeMessage::StatusQuery { job_id } => {
             debug!("[COMPUTE-NET] Status query untuk {} dari {}", job_id, sender_peer_id);
-            // TODO: query ke store dan kembalikan status
+            if let Some(store) = store {
+                return handle_status_query(store, job_id).await;
+            }
         }
-
-        _ => {
-            debug!("[COMPUTE-NET] Pesan compute diabaikan: {:?}", std::mem::discriminant(&msg));
-        }
+        _ => {}
     }
-
     None
+}
+
+/// Fungsi penanganan status query (tetap dipertahankan, dipanggil dari atas).
+pub async fn handle_status_query(store: &ComputeStore, job_id: &str) -> Option<ComputeMessage> {
+    match store.get_result(job_id) {
+        Ok(Some(res)) => Some(ComputeMessage::StatusReply {
+            job_id: job_id.to_string(),
+            status: res.status.as_str().to_string(),
+            exec_time_ms: Some(res.exec_time_ms),
+        }),
+        Ok(None) => Some(ComputeMessage::StatusReply {
+            job_id: job_id.to_string(),
+            status: "not_found".into(),
+            exec_time_ms: None,
+        }),
+        Err(e) => Some(ComputeMessage::StatusReply {
+            job_id: job_id.to_string(),
+            status: format!("error: {}", e),
+            exec_time_ms: None,
+        }),
+    }
 }

@@ -258,6 +258,11 @@ pub async fn handle_compute_status(
             "job_id": job_id,
             "status": res.status.as_str(),
             "output": B64.encode(&res.output),
+            "stderr": B64.encode(&res.stderr),
+            "exec_time_ms": res.exec_time_ms,
+            "fuel_consumed": res.fuel_consumed,
+            "exit_code": res.exit_code,
+            "executor_peer_id": res.executor_peer_id,
         })),
         None => Err("job not found".into()),
     }

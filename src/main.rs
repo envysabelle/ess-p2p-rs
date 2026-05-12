@@ -634,7 +634,8 @@ async fn bootstrap_runtime(
 
                         // Simpan handle ke controller
                         controller_arc.set_compute_handle(handle.clone());
-                        compute_handle = Some(handle);
+                        controller_arc.set_compute_store(store.clone());
+			compute_handle = Some(handle);
                         compute_store_arc = Some(store);
                         info!("[BOOT] Compute Layer OK — WASM runtime aktif");
                     }

@@ -54,6 +54,9 @@ pub enum Action {
     GatewayEgress,
     WebTraffic,
     AdminUpdate,
+    /// Submit job komputasi ke node ini (pemakaian resource CPU/memori)
+    #[serde(rename = "compute_submit")]
+    ComputeSubmit,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -198,6 +201,7 @@ impl AuthorityState {
             Action::GatewayEgress => (self.policies.allow_gateway_traffic && role >= Role::Gateway, "egress_check".into()),
             Action::AdminUpdate => (role >= Role::Validator, "admin_check".into()),
             Action::WebTraffic => (self.policies.allow_web_traffic, "web_policy_check".into()),
+            Action::ComputeSubmit => (role >= Role::Client, "compute_submit_allowed".into()),
         }
     }
 
