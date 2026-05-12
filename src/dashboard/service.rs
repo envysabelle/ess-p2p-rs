@@ -6,6 +6,10 @@ use crate::network_controller::NetworkController;
 use crate::security_runtime::{PolicyConfig, SecurityRuntime};
 use crate::world_state::{SharedWorldState, WorldStateSnapshot};
 
+// ── Compute imports (PATCH #7) ────────────────────────────────────────
+use crate::compute::scheduler::ComputeSchedulerHandle;
+use crate::compute::store::ComputeStore;
+
 use super::model::{DashboardSummary, LogEvent, NodeHealth, NodeInfo, RouteInfo};
 use super::store::DashboardStore;
 
@@ -16,6 +20,8 @@ pub struct DashboardService {
     security: Option<Arc<SecurityRuntime>>,
     authority: Option<AuthorityManager>,
     controller: Option<Arc<NetworkController>>,
+    compute_handle: Option<ComputeSchedulerHandle>,   // NEW
+    compute_store: Option<Arc<ComputeStore>>,          // NEW
 }
 
 impl DashboardService {
@@ -26,6 +32,8 @@ impl DashboardService {
             security: None,
             authority: None,
             controller: None,
+            compute_handle: None,   // NEW
+            compute_store: None,    // NEW
         }
     }
 
@@ -49,8 +57,64 @@ impl DashboardService {
         self
     }
 
+    // ── Setter untuk compute layer (PATCH #7) ─────────────────────────
+    pub fn with_compute(
+        mut self,
+        handle: ComputeSchedulerHandle,
+        store: Arc<ComputeStore>,
+    ) -> Self {
+        self.compute_handle = Some(handle);
+        self.compute_store = Some(store);
+        self
+    }
+
     pub fn store(&self) -> DashboardStore {
         self.store.clone()
+    }
+
+    // ── Getter untuk compute layer (PATCH #7) ─────────────────────────
+    pub fn compute_handle(&self) -> Result<&ComputeSchedulerHandle, String> {
+        self.compute_handle
+            .as_ref()
+            .ok_or_else(|| "compute not available".to_string())
+    }
+
+    pub fn compute_store(&self) -> Result<&Arc<ComputeStore>, String> {
+        self.compute_store
+            .as_ref()
+            .ok_or_else(|| "compute store not available".to_string())
+    }
+
+    // ── Compute capacity (untuk dashboard) ──────────────────────────
+    pub fn compute_capacity(&self) -> Result<serde_json::Value, String> {
+        let handle = self.compute_handle()?;
+        let cap = crate::compute::network::NodeCapacity::current(
+            &self
+                .controller
+                .as_ref()
+                .ok_or("no controller")?
+                .local_peer_id
+                .to_string(),
+            handle,
+        );
+        Ok(serde_json::to_value(cap).unwrap_or_default())
+    }
+
+    // ── Compute store stats ─────────────────────────────────────────
+    pub fn compute_store_stats(&self) -> Result<serde_json::Value, String> {
+        let store = self.compute_store()?;
+        let queue_depth = store.queue_depth();
+        let result_count = store.result_count();
+        Ok(serde_json::json!({
+            "queue_depth": queue_depth,
+            "result_count": result_count
+        }))
+    }
+
+    // ── Compute database stats ──────────────────────────────────────
+    pub fn compute_db_stats(&self) -> Result<serde_json::Value, String> {
+        let store = self.compute_store()?;
+        Ok(store.db_stats())
     }
 
     pub fn world_snapshot(&self) -> Option<WorldStateSnapshot> {

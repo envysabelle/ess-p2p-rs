@@ -1,4 +1,4 @@
-// src/main.rs (updated with security patches – H-07 applied)
+// src/main.rs (updated with security patches – H-07 applied, compute layer integrated)
 mod authority;
 mod bootstrap_cache;
 mod config;
@@ -78,7 +78,7 @@ use libp2p::multiaddr::Protocol;
 // ── Compute Layer use (NEW) ──────────────────────────────────────────────────
 use compute::{
     store::ComputeStore,
-    scheduler::{spawn_scheduler, SchedulerConfig},
+    scheduler::{spawn_scheduler, SchedulerConfig, ComputeSchedulerHandle},
     executor::WasmEngine,
 };
 
@@ -127,9 +127,6 @@ impl Lifecycle {
         let phase_signal = self.phase.clone();
         let bridge_handle_opt = self.bridge_handle.take();
 
-        // Spawn task untuk menangkap SIGTERM / Ctrl+C, hanya jika bridge handle tersedia.
-        // Bridge yang di-spawn di dalam bootstrap_runtime sudah memiliki mekanisme shutdown sendiri,
-        // sehingga abort manual di sini hanya relevan bila bridge dibuat di luar (sebelumnya duplikat).
         if let Some(bridge_handle) = bridge_handle_opt {
             let phase_signal = phase_signal.clone();
             let bridge_handle_clone = bridge_handle.clone();
@@ -147,8 +144,6 @@ impl Lifecycle {
                 let _ = shutdown_tx.send(());
             });
         }
-        // Jika tidak ada bridge handle, shutdown abort tidak diperlukan; bridge di dalam runtime
-        // akan mati dengan sendirinya saat runtime berhenti.
 
         let mut shutdown_rx = self.shutdown_tx.subscribe();
 
@@ -180,57 +175,8 @@ impl Lifecycle {
                 }
             };
 
-            // ── INISIALISASI COMPUTE LAYER ──────────────────────────────────────────
-            let authority_arc = Arc::new(ctx.authority.clone());
-            let compute_handle = if std::env::var("ESS_COMPUTE_ENABLED")
-                .unwrap_or_else(|_| "false".into())
-                .eq_ignore_ascii_case("true")
-            {
-                info!("[BOOT] Initializing Compute Layer (WASM Runtime)...");
-
-                // Buka atau buat compute store
-                match ComputeStore::open() {
-                    Ok(store) => {
-                        let store = Arc::new(store);
-
-                        // Init WASM engine (JIT compiler)
-                        match WasmEngine::new() {
-                            Ok(engine) => {
-                                let sched_config = SchedulerConfig {
-                                    max_concurrent_jobs: std::env::var("ESS_COMPUTE_MAX_JOBS")
-                                        .ok()
-                                        .and_then(|s| s.parse().ok())
-                                        .unwrap_or(4),
-                                    poll_interval_ms: 500,
-                                    accept_remote_jobs: true,
-                                };
-
-                                let handle = spawn_scheduler(
-                                    sched_config,
-                                    store,
-                                    engine,
-                                    authority_arc,
-                                    ctx.ess.peer_id().to_string(),
-                                );
-
-                                info!("[BOOT] Compute Layer OK — WASM runtime aktif");
-                                Some(handle)
-                            }
-                            Err(e) => {
-                                error!("[BOOT] Gagal init WASM engine: {}. Compute layer dinonaktifkan.", e);
-                                None
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("[BOOT] Gagal buka compute store: {}. Compute layer dinonaktifkan.", e);
-                        None
-                    }
-                }
-            } else {
-                info!("[BOOT] Compute Layer dinonaktifkan (set ESS_COMPUTE_ENABLED=true untuk mengaktifkan)");
-                None
-            };
+            // Compute handle sudah disiapkan di bootstrap_runtime, tinggal ambil.
+            let compute_handle = ctx.compute_handle.clone();
 
             let autonomous_loop = ControlLoop::new(
                 ctx.controller.clone(),
@@ -240,7 +186,7 @@ impl Lifecycle {
                 ctx.world_store.clone(),
                 ctx.event_rx,
                 ctx.dashboard_tx.clone(),
-                compute_handle,   // <-- diteruskan
+                compute_handle,
             );
 
             let control_handle = tokio::spawn(async move { autonomous_loop.run().await; });
@@ -299,6 +245,7 @@ struct BootContext {
     controller: Arc<NetworkController>,
     event_rx: mpsc::Receiver<SystemEvent>,
     crdt_world: Arc<TokioRwLock<crdt_state::CrdtWorldState>>,
+    compute_handle: Option<ComputeSchedulerHandle>,   // NEW
 }
 
 struct ShutdownController {
@@ -453,15 +400,12 @@ async fn bootstrap_runtime(
     let policy_cfg_path = env::var("POLICY_INNER_CONFIG")
         .unwrap_or_else(|_| "data/policy_inner.toml".into());
     security.load_policy_from_file(&policy_cfg_path)?;
-    // NOTE: verify_bundle_config() dipanggil SETELAH attach_authority() di bawah,
-    // karena butuh authority state untuk export bundle hash.
 
     let auth_path = PathBuf::from(
         env::var("AUTHORITY_FILE").unwrap_or_else(|_| "data/authority.bin".into()),
     );
     let (mut authority_state, _) = bootstrap_authority(&auth_path)?;
 
-    // [FIX C-03] AUTHORITY_SUPERNODES hanya untuk genesis bootstrap (authority.bin belum ada)
     if !auth_path.exists() {
         if let Ok(env_supernodes) = env::var("AUTHORITY_SUPERNODES") {
             tracing::info!(
@@ -496,9 +440,6 @@ async fn bootstrap_runtime(
     let authority = AuthorityManager::new(authority_state);
     security.attach_authority(authority.clone());
 
-    // [FIX-BOOT] verify_bundle_config dipanggil di sini — SETELAH attach_authority.
-    // Jika trusted_bundle_hash tidak dikonfigurasi, hanya warn (tidak crash),
-    // supaya node bisa boot tanpa pre-configured hash.
     match security.verify_bundle_config() {
         Ok(()) => tracing::info!("[SECURITY] Bundle config verified against trusted hash."),
         Err(e) => tracing::warn!("[SECURITY] Bundle config verification skipped: {} — continuing boot.", e),
@@ -508,7 +449,6 @@ async fn bootstrap_runtime(
     let recovery = world_store.recover_bundle(authority.get())?;
     let world_state = Arc::new(RwLock::new(recovery.world));
 
-    // Patch 10b: satu write lock untuk set_local_profile dan mark_peer_activated
     {
         let mut ws = world_state.write().unwrap();
         ws.set_local_profile(profile);
@@ -530,7 +470,6 @@ async fn bootstrap_runtime(
     let controller_arc = Arc::new(controller);
     let security_arc = Arc::new(security);
 
-    // [FIX H-07] Derive governance HMAC key and set it to the governance engine
     let gov_hmac_key = keystore.derive_key("ess-governance-hmac-v1").to_vec();
     {
         let mut gov = controller_arc.governance_engine.write().unwrap();
@@ -564,7 +503,6 @@ async fn bootstrap_runtime(
         tracing::info!("[ID-ROTATION] Internal key rotation task spawned.");
     }
 
-    // [FIX H-04] Cross-check NODE_ROLE claim against the authority state.
     let node_role_str = env::var("NODE_ROLE").unwrap_or_else(|_| "client".to_string());
     let claimed_role = node_role_str.to_ascii_lowercase();
     tracing::info!("[BOOT] NODE_ROLE claimed: {}", claimed_role);
@@ -609,7 +547,6 @@ async fn bootstrap_runtime(
     tracing::info!("[BOOT] Resolved role: {:?}", resolved_role);
     ess.bind_role(resolved_role);
 
-    // Simpan representasi string untuk penggunaan selanjutnya
     let role = match resolved_role {
         NodeRole::Supernode => "supernode".to_string(),
         NodeRole::Gateway => "gateway".to_string(),
@@ -661,12 +598,72 @@ async fn bootstrap_runtime(
         warn!("[BOOT] Web Registry publication skipped: {}", e);
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    //  Inisialisasi Compute Layer (PATCH #8) – dipindahkan ke sini
+    // ═══════════════════════════════════════════════════════════════
+    let authority_arc = Arc::new(authority.clone());
+    let mut compute_handle: Option<ComputeSchedulerHandle> = None;
+    let mut compute_store_arc: Option<Arc<ComputeStore>> = None;
+
+    if std::env::var("ESS_COMPUTE_ENABLED")
+        .unwrap_or_else(|_| "false".into())
+        .eq_ignore_ascii_case("true")
+    {
+        info!("[BOOT] Initializing Compute Layer (WASM Runtime)...");
+        match ComputeStore::open() {
+            Ok(store) => {
+                let store = Arc::new(store);
+                match WasmEngine::new() {
+                    Ok(engine) => {
+                        let sched_config = SchedulerConfig {
+                            max_concurrent_jobs: std::env::var("ESS_COMPUTE_MAX_JOBS")
+                                .ok()
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(4),
+                            poll_interval_ms: 500,
+                            accept_remote_jobs: true,
+                        };
+
+                        let handle = spawn_scheduler(
+                            sched_config,
+                            store.clone(),
+                            engine,
+                            authority_arc,
+                            ess.peer_id().to_string(),
+                        );
+
+                        // Simpan handle ke controller
+                        controller_arc.set_compute_handle(handle.clone());
+                        compute_handle = Some(handle);
+                        compute_store_arc = Some(store);
+                        info!("[BOOT] Compute Layer OK — WASM runtime aktif");
+                    }
+                    Err(e) => {
+                        error!("[BOOT] Gagal init WASM engine: {}. Compute layer dinonaktifkan.", e);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("[BOOT] Gagal buka compute store: {}. Compute layer dinonaktifkan.", e);
+            }
+        }
+    } else {
+        info!("[BOOT] Compute Layer dinonaktifkan (set ESS_COMPUTE_ENABLED=true untuk mengaktifkan)");
+    }
+
+    // Bangun DashboardService dengan compute layer jika tersedia
     let db_store = DashboardStore::new();
-    let db_service = DashboardService::new(db_store.clone())
+    let mut db_service_builder = DashboardService::new(db_store.clone())
         .with_security(Arc::clone(&security_arc))
         .with_world_state(world_state.clone())
         .with_authority(authority.clone())
         .with_controller(controller_arc.clone());
+
+    if let (Some(handle), Some(store)) = (compute_handle.clone(), compute_store_arc.clone()) {
+        db_service_builder = db_service_builder.with_compute(handle, store);
+    }
+
+    let db_service = db_service_builder;
 
     let db_bridge = spawn_dashboard_bridge(db_store, DashboardBridgeConfig::default());
     let sender = db_bridge.sender();
@@ -747,6 +744,7 @@ async fn bootstrap_runtime(
             controller: controller_arc,
             event_rx,
             crdt_world: crdt_world_arc,
+            compute_handle,   // NEW
         },
         shutdown_ctrl,
     ))
@@ -841,9 +839,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     // =============================================================================
 
-    // ✅ Bridge sudah di-spawn di dalam bootstrap_runtime(), tidak perlu di sini.
-    // Lifecycle akan berjalan tanpa DashboardBridgeHandle (None) dan hanya
-    // mengandalkan bridge yang dibuat di dalam bootstrap.
     let lifecycle = Lifecycle::new(keypair, profile, None);
     tracing::info!("[DEBUG] Entering lifecycle execute...");
     lifecycle.execute().await

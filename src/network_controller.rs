@@ -4,6 +4,7 @@ use crate::gateway::{
     validate_gateway_access, validate_gateway_route, GatewayAuditEntry, GatewayRateLimitConfig,
     GatewayRateLimitDecision, GatewayRateLimiter,
 };
+use crate::compute::scheduler::ComputeSchedulerHandle;
 use crate::ghost_runtime::{GhostActionSink, GhostRuntimeHandle};
 use crate::message::DirectResponse;
 use crate::message::DirectRequest;
@@ -27,8 +28,7 @@ use tokio::time::{sleep, timeout, Duration, Instant};
 use dashmap::DashMap;
 use x25519_dalek::PublicKey as X25519PublicKey;
 use sha2::{Sha256, Digest};
-use parking_lot::Mutex;
-
+use parking_lot::Mutex;                                                                 
 // Impor untuk onion routing yang sudah dipindahkan ke support
 use crate::network::runtime::support::send_via_onion;
 use crate::network::runtime::runner::RuntimeContext;
@@ -64,6 +64,7 @@ pub struct NetworkController {
     crdt_world: Arc<RwLock<Option<Arc<tokio::sync::RwLock<crdt_state::CrdtWorldState>>>>>,
     onion_static_secret: Arc<RwLock<Option<[u8; 32]>>>,
     onion_config: Arc<RwLock<Option<(usize, Arc<DashMap<PeerId, X25519PublicKey>>)>>>,
+    compute_handle: Arc<RwLock<Option<ComputeSchedulerHandle>>>,
     current_rotation_seed: Arc<Mutex<Option<[u8; 32]>>>,
 }
 
@@ -135,6 +136,7 @@ impl NetworkController {
             crdt_world: Arc::new(RwLock::new(None)),
             onion_static_secret: Arc::new(RwLock::new(None)),
             onion_config: Arc::new(RwLock::new(None)),
+            compute_handle: Arc::new(RwLock::new(None)),
             current_rotation_seed: Arc::new(Mutex::new(None)),
         }
     }
@@ -196,6 +198,17 @@ impl NetworkController {
     /// Set seed awal (dari luar, misal dari governance atau genesis)
     pub fn set_rotation_seed(&self, seed: [u8; 32]) {
         *self.current_rotation_seed.lock() = Some(seed);
+    }
+
+    // ── Compute handle management (PATCH) ─────────────────────────────
+    /// Menyimpan ComputeSchedulerHandle yang sudah berjalan.
+    pub fn set_compute_handle(&self, handle: ComputeSchedulerHandle) {
+        *self.compute_handle.write().unwrap() = Some(handle);
+    }
+
+    /// Mendapatkan clone ComputeSchedulerHandle jika ada.
+    pub fn get_compute_handle(&self) -> Option<ComputeSchedulerHandle> {
+        self.compute_handle.read().unwrap().clone()
     }
 
     // --- Kirim pesan melalui onion routing (fire-and-forget) ---

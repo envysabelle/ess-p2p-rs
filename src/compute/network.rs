@@ -6,9 +6,8 @@
 //!   ComputeResult   → kirim balik hasil ke submitter
 //!   ComputeCancel   → batalkan job yang sedang berjalan
 //!   ComputeQuery    → tanya status sebuah job
-//!   ComputeCapacity → broadcast kapasitas komputasi node ini
-
-use crate::compute::scheduler::{ComputeSchedulerHandle};
+//!   ComputeCapacity → broadcast kapasitas komputasi node ini                          
+use crate::compute::scheduler::ComputeSchedulerHandle;
 use crate::compute::types::{ComputeJobSpec, ComputeResult, JobId};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,10 +22,10 @@ pub enum ComputeMessage {
 
     /// Executor mengirim hasil ke submitter
     Result(ComputeResult),
-
+                                                                                            
     /// Request untuk membatalkan sebuah job
     Cancel { job_id: String },
-
+                                                                                            
     /// Query status sebuah job
     StatusQuery { job_id: String },
 
@@ -76,6 +75,9 @@ impl NodeCapacity {
 
 /// Handler untuk pesan compute yang masuk dari jaringan P2P.
 /// Dipanggil dari network_controller saat ada DirectRequest dengan kind="compute"
+///
+/// Signature: menerima raw_payload, sender_peer_id, dan handle scheduler
+/// Langsung dari events.rs
 pub async fn handle_incoming_compute_message(
     raw_payload: &[u8],
     sender_peer_id: &str,

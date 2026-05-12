@@ -23,6 +23,9 @@ use crate::governance::messages::{
     ProposalType, ProposalAnnouncement, VoteMessage, ActivationCertificate,
 };
 
+// Compute imports (PATCH #2)
+use crate::compute::network;
+
 use chrono::Utc;
 use futures::StreamExt;
 use hex;
@@ -1078,6 +1081,49 @@ async fn handle_direct_request(
             warn!("[PQC] Invalid HybridPublicKey from {}", peer);
         }
         return;
+    }
+
+    // ── Compute message handler (PATCH #2) ────────────────────────────────
+    if request.kind == "compute" {
+        let handle_opt = controller.get_compute_handle();
+        if let Some(scheduler) = handle_opt {
+            let reply = network::handle_incoming_compute_message(
+                body,
+                &peer.to_string(),
+                &scheduler,
+            ).await;
+
+            let reply_bytes = match reply {
+                Some(msg) => serde_json::to_vec(&msg).unwrap_or_default(),
+                None => b"{\"status\":\"processed\"}".to_vec(),
+            };
+            let resp = DirectResponse::plain_ok_bytes(
+                &request.message_id,
+                &local.to_string(),
+                &peer.to_string(),
+                reply_bytes,
+            );
+            let handle = controller.swarm_handle();
+            let mut guard = handle.lock();
+            if let Some(swarm) = guard.as_mut() {
+                let _ = swarm.behaviour_mut().direct.send_response(channel, resp);
+            }
+            return;
+        } else {
+            // Compute layer belum aktif, balas error
+            let resp = DirectResponse::plain_error(
+                &request.message_id,
+                &local.to_string(),
+                &peer.to_string(),
+                "compute_not_available",
+            );
+            let handle = controller.swarm_handle();
+            let mut guard = handle.lock();
+            if let Some(swarm) = guard.as_mut() {
+                let _ = swarm.behaviour_mut().direct.send_response(channel, resp);
+            }
+            return;
+        }
     }
 
     // fallback direct request

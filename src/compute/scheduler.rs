@@ -53,7 +53,7 @@ pub enum ComputeEvent {
 }
 
 /// Handle untuk berinteraksi dengan scheduler dari luar
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ComputeSchedulerHandle {
     submit_tx: mpsc::Sender<ComputeJobSpec>,
     cancel_tx: mpsc::Sender<JobId>,

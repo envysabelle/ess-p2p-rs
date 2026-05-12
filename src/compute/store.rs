@@ -16,6 +16,7 @@ use tracing::{debug, info, warn};
 const DB_PATH: &str = "data/compute_store";
 const MAX_STORED_RESULTS: usize = 10_000; // Batas total hasil yang disimpan
 
+#[derive(Debug)]
 pub struct ComputeStore {
     db: Arc<sled::Db>,
     jobs_tree: sled::Tree,
@@ -162,6 +163,14 @@ impl ComputeStore {
     /// Jumlah total hasil yang tersimpan.
     pub fn result_count(&self) -> usize {
         self.results_tree.len()
+    }
+
+    /// Statistik database (memastikan field `db` terpakai)
+    pub fn db_stats(&self) -> serde_json::Value {
+        serde_json::json!({
+            "db_size_on_disk": self.db.size_on_disk().unwrap_or(0),
+            "total_trees": 3,
+        })
     }
 
     /// GC: hapus hasil terlama jika melebihi MAX_STORED_RESULTS.

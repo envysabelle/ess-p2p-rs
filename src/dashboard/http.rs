@@ -1,6 +1,5 @@
 // src/dashboard/http.rs
 use serde_json::Value;
-
 use super::api::{
     dashboard_payload,
     logs_payload,
@@ -12,6 +11,11 @@ use super::api::{
     policy_export_payload,
     policy_reload_payload,
     send_message_payload,
+    handle_compute_submit,
+    handle_compute_status,
+    handle_compute_capacity,   // NEW
+    handle_compute_stats,      // NEW
+    handle_compute_db_stats,   // NEW
 };
 use super::service::DashboardService;
 
@@ -95,7 +99,7 @@ pub async fn handle_dashboard_http(
     query: Option<&str>,
     accept_json: bool,
     body: Option<&str>,
-    token: Option<&str>,  // Patch 1: parameter token
+    token: Option<&str>,
 ) -> Option<DashboardHttpResponse> {
     let method = method.trim().to_ascii_uppercase();
 
@@ -105,7 +109,6 @@ pub async fn handle_dashboard_http(
 
     let normalized = path.trim();
 
-    // Helper untuk cek token pada endpoint sensitif
     let require_admin = || -> Option<DashboardHttpResponse> {
         if token.is_none() {
             Some(json_response(
@@ -147,7 +150,6 @@ pub async fn handle_dashboard_http(
             Some(json_response(200, payload))
         }
 
-        // [FIX M-12] Protect /api/ess/authority with require_admin() check.
         "/api/ess/authority" => {
             if method != "GET" { return None; }
             if let Some(err) = require_admin() {
@@ -157,7 +159,6 @@ pub async fn handle_dashboard_http(
             Some(json_response(200, payload))
         }
 
-        // Policy endpoints
         "/api/policy" => {
             if method != "GET" { return None; }
             let payload = policy_status_payload(service).await;
@@ -172,7 +173,6 @@ pub async fn handle_dashboard_http(
 
         "/api/policy/reload" => {
             if method != "POST" { return None; }
-            // Patch 1: Hanya admin yang bisa reload policy
             if let Some(err) = require_admin() {
                 return Some(err);
             }
@@ -180,10 +180,8 @@ pub async fn handle_dashboard_http(
             Some(json_response(200, payload))
         }
 
-        // Send direct message endpoint
         "/api/ess/send" => {
             if method != "POST" { return None; }
-            // Patch 1: Hanya admin yang bisa mengirim pesan langsung
             if let Some(err) = require_admin() {
                 return Some(err);
             }
@@ -205,6 +203,58 @@ pub async fn handle_dashboard_http(
                 Err(e) => serde_json::json!({"ok":false,"error":format!("invalid json: {}", e)}),
             };
             Some(json_response(200, payload))
+        }
+
+        // ── Compute endpoints ────────────────────────────────────────
+        "/api/ess/compute/submit" => {
+            if method != "POST" { return None; }
+            if let Some(err) = require_admin() {
+                return Some(err);
+            }
+            let body_str = match body {
+                Some(b) => b,
+                None => return Some(json_response(400, serde_json::json!({"ok":false,"error":"missing body"}))),
+            };
+            match handle_compute_submit(service, body_str).await {
+                Ok(payload) => Some(json_response(200, payload)),
+                Err(e) => Some(json_response(400, serde_json::json!({"ok":false,"error":e.to_string()}))),
+            }
+        }
+
+        "/api/ess/compute/capacity" => {
+            if method != "GET" { return None; }
+            match handle_compute_capacity(service).await {
+                Ok(payload) => Some(json_response(200, payload)),
+                Err(e) => Some(json_response(500, serde_json::json!({"ok":false,"error":e.to_string()}))),
+            }
+        }
+
+        "/api/ess/compute/stats" => {
+            if method != "GET" { return None; }
+            match handle_compute_stats(service).await {
+                Ok(payload) => Some(json_response(200, payload)),
+                Err(e) => Some(json_response(500, serde_json::json!({"ok":false,"error":e.to_string()}))),
+            }
+        }
+
+        "/api/ess/compute/db-stats" => {
+            if method != "GET" { return None; }
+            match handle_compute_db_stats(service).await {
+                Ok(payload) => Some(json_response(200, payload)),
+                Err(e) => Some(json_response(500, serde_json::json!({"ok":false,"error":e.to_string()}))),
+            }
+        }
+
+        _ if normalized.starts_with("/api/ess/compute/status/") => {
+            if method != "GET" { return None; }
+            let job_id = normalized.trim_start_matches("/api/ess/compute/status/").trim();
+            if job_id.is_empty() {
+                return Some(json_response(400, serde_json::json!({"ok":false,"error":"missing job_id"})));
+            }
+            match handle_compute_status(service, job_id).await {
+                Ok(payload) => Some(json_response(200, payload)),
+                Err(e) => Some(json_response(404, serde_json::json!({"ok":false,"error":e.to_string()}))),
+            }
         }
 
         _ if normalized.starts_with("/api/ess/nodes/") => {

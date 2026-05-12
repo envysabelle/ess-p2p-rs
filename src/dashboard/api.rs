@@ -1,8 +1,10 @@
 use chrono::Utc;
 use serde_json::{json, Value};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-
 use super::service::DashboardService;
+
+// ── Compute-related imports (PATCH #6) ────────────────────────────────
+use crate::compute::types::ComputeJobSpec;
 
 fn now() -> String {
     Utc::now().to_rfc3339()
@@ -228,4 +230,58 @@ pub async fn send_message_payload(service: &DashboardService, peer_id: &str, mes
             "error": format!("Invalid peer_id: {}", e),
         }),
     }
+}
+
+// ── Compute endpoint handlers (PATCH #6) ────────────────────────────────────────
+
+/// POST /api/ess/compute/submit  body: JSON ComputeJobSpec
+pub async fn handle_compute_submit(
+    service: &DashboardService,
+    body: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let handle = service.compute_handle()?;
+    let spec: ComputeJobSpec = serde_json::from_str(body)?;
+    let job_id = handle.submit_job(spec).await?;
+    Ok(json!({"ok":true,"job_id":job_id.0}))
+}
+
+/// GET /api/ess/compute/status/:job_id
+pub async fn handle_compute_status(
+    service: &DashboardService,
+    job_id: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let store = service.compute_store()?;
+    let result = store.get_result(job_id)?;
+    match result {
+        Some(res) => Ok(json!({
+            "ok": true,
+            "job_id": job_id,
+            "status": res.status.as_str(),
+            "output": B64.encode(&res.output),
+        })),
+        None => Err("job not found".into()),
+    }
+}
+
+// ── Compute capacity / stats endpoints (untuk menghilangkan warning) ─────────
+
+/// GET /api/ess/compute/capacity
+pub async fn handle_compute_capacity(
+    service: &DashboardService,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    service.compute_capacity().map_err(|e| e.into())
+}
+
+/// GET /api/ess/compute/stats
+pub async fn handle_compute_stats(
+    service: &DashboardService,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    service.compute_store_stats().map_err(|e| e.into())
+}
+
+/// GET /api/ess/compute/db-stats
+pub async fn handle_compute_db_stats(
+    service: &DashboardService,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    service.compute_db_stats().map_err(|e| e.into())
 }
