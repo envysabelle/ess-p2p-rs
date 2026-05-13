@@ -2,7 +2,6 @@
 //! Tipe data fundamental untuk ESS Compute Layer.
 //! Semua tipe di sini adalah wire-compatible (Serialize/Deserialize)
 //! sehingga bisa dikirim via P2P atau disimpan di sled.
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -14,7 +13,6 @@ pub const MAX_WASM_BYTECODE_SIZE: usize = 4 * 1024 * 1024;
 
 /// Default batas memori per job (64 MB)
 pub const DEFAULT_MEMORY_LIMIT_MB: u64 = 64;
-
 /// Default timeout eksekusi per job (30 detik)
 pub const DEFAULT_EXEC_TIMEOUT_MS: u64 = 30_000;
 
@@ -261,6 +259,10 @@ pub struct ComputeResult {
     pub memory_used_bytes: u64,
     /// Node yang mengeksekusi job ini
     pub executor_peer_id: String,
+    // ========== PATCH #7a: Tambah submitter_peer_id untuk callback ==========
+    /// Submitter yang mengirim job (untuk callback hasil)
+    pub submitter_peer_id: String,
+    // ========================================================================
     /// Timestamp selesai
     pub finished_at: u64,
 }

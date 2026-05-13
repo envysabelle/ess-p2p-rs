@@ -18,6 +18,28 @@ pub enum ComputeMessage {
     Capacity(NodeCapacity),
 }
 
+// ========== PATCH #7: Helper untuk mengirim hasil ke submitter ==========
+impl ComputeMessage {
+    /// Kirim hasil job kembali ke submitter via direct message.
+    pub async fn send_result(
+        controller: &crate::network_controller::NetworkController,
+        target_peer: &str,
+        result: ComputeResult,
+    ) -> Result<(), String> {
+        let peer_id = target_peer
+            .parse::<libp2p::PeerId>()
+            .map_err(|e| format!("Invalid peer ID: {}", e))?;
+        let msg = ComputeMessage::Result(result);
+        let payload = serde_json::to_vec(&msg).map_err(|e| e.to_string())?;
+        controller
+            .send_typed_message(peer_id, "compute", payload)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+// ========== End of Patch #7 ==========
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeCapacity {
     pub peer_id: String,

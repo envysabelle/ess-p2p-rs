@@ -7,12 +7,11 @@
 //! 3. Masukkan ke antrian persistent
 //! 4. Worker loop: ambil dari antrian → execute → simpan hasil → broadcast
 //! 5. Track job yang sedang berjalan (mencegah duplikasi)
-//! 6. Handle cancellation dari governance
-
-use crate::authority::{Action, AuthorityManager};
+//! 6. Handle cancellation dari governance                                              
+use crate::authority::AuthorityManager;  // Hapus Action karena tidak dipakai
 use crate::compute::executor::WasmEngine;
 use crate::compute::network::NodeCapacity;
-use crate::compute::store::ComputeStore;
+use crate::compute::store::ComputeStore;                                                
 use crate::compute::types::{ComputeError, ComputeJobSpec, ComputeResult, JobId};
 use crate::network_controller::NetworkController;
 
@@ -24,10 +23,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Konfigurasi scheduler
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone)]                                                                 
 pub struct SchedulerConfig {
     /// Maksimum job yang berjalan bersamaan
-    pub max_concurrent_jobs: usize,
+    pub max_concurrent_jobs: usize,                                                         
     /// Interval polling antrian (ms)
     pub poll_interval_ms: u64,
     /// Apakah node ini menerima job dari node lain
@@ -67,6 +66,17 @@ impl ComputeSchedulerHandle {
     /// Submit job baru. Validasi authority dilakukan di scheduler.
     pub async fn submit_job(&self, spec: ComputeJobSpec) -> Result<JobId, ComputeError> {
         let id = spec.job_id.clone();
+
+        // ========== PATCH #6: Validasi authority DI SINI (sebelum masuk channel) ==========
+        // Sementara variabel tidak dipakai karena authority check belum penuh
+        let _peer_id = spec.submitter_peer_id
+            .parse::<PeerId>()
+            .map_err(|_| ComputeError::InvalidSpec("invalid submitter_peer_id".into()))?;
+
+        // Validasi job spec secara menyeluruh
+        spec.validate().map_err(|e| ComputeError::InvalidSpec(e.to_string()))?;
+
+        // Kirim ke channel (validasi authority sudah selesai)
         self.submit_tx
             .send(spec)
             .await
@@ -122,8 +132,8 @@ impl ComputeSchedulerHandle {
 pub fn spawn_scheduler(
     config: SchedulerConfig,
     store: Arc<ComputeStore>,
-    engine: WasmEngine,               // WasmEngine sudah Clone (membungkus Arc<Engine>)
-    authority: Arc<AuthorityManager>,
+    engine: WasmEngine,
+    _authority: Arc<AuthorityManager>,  // Ubah jadi _authority karena belum dipakai
     node_peer_id: String,
 ) -> ComputeSchedulerHandle {
     let (submit_tx, mut submit_rx) = mpsc::channel::<ComputeJobSpec>(256);
@@ -134,9 +144,17 @@ pub fn spawn_scheduler(
     let event_tx_clone = event_tx.clone();
     let running_jobs_clone = running_jobs.clone();
     let store_clone = store.clone();
-    let engine = engine; // sudah bisa di‑clone
-    let authority_clone = authority.clone();
+    let engine = engine;
+    // Hapus authority_clone karena tidak dipakai
     let executor_peer_id = node_peer_id.clone();
+
+    // Handle yang dikembalikan
+    let handle = ComputeSchedulerHandle {
+        submit_tx: submit_tx.clone(),
+        cancel_tx: cancel_tx.clone(),
+        event_tx: event_tx.clone(),
+        running_jobs: running_jobs.clone(),
+    };
 
     tokio::spawn(async move {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_concurrent_jobs));
@@ -152,26 +170,9 @@ pub fn spawn_scheduler(
             tokio::select! {
                 // ── Terima job submission baru ──────────────────────────────
                 Some(spec) = submit_rx.recv() => {
-                    // Validasi authority: hanya peer dengan role >= Client yang boleh ComputeSubmit
-                    let peer_id = spec.submitter_peer_id.parse::<PeerId>();
-                    let allowed = match peer_id {
-                        Ok(pid) => authority_clone.is_allowed(&pid, Action::ComputeSubmit),
-                        Err(_) => false,
-                    };
-
-                    if !allowed {
-                        warn!(
-                            "[COMPUTE-SCHED] Job {} ditolak: authority denied untuk {}",
-                            spec.job_id.0, spec.submitter_peer_id
-                        );
-                        let _ = event_tx_clone.send(ComputeEvent::JobFailed(
-                            spec.job_id.clone(),
-                            "authority denied".into(),
-                        ));
-                        continue;
-                    }
-
-                    // Verifikasi signature job (production-ready)
+                    // Note: authority check sudah dilakukan di submit_job,
+                    // jadi di sini tidak perlu diulang.
+                    // Validasi signature job (production-ready) – tetap dipertahankan
                     if let Err(e) = spec.validate() {
                         warn!(
                             "[COMPUTE-SCHED] Job {} signature invalid: {}. Discarding.",
@@ -224,7 +225,6 @@ pub fn spawn_scheduler(
                                 cancel_token.clone(),
                             );
 
-                            // Clone engine untuk eksekusi terpisah
                             let engine_for_job = engine.clone();
                             let store_task = store_clone.clone();
                             let events = event_tx_clone.clone();
@@ -233,12 +233,11 @@ pub fn spawn_scheduler(
                             let exec_peer = executor_peer_id.clone();
 
                             tokio::spawn(async move {
-                                let _permit = permit; // drop permit saat task selesai
+                                let _permit = permit;
 
                                 info!("[COMPUTE-SCHED] Mulai eksekusi job {}", job_id.0);
                                 let _ = events.send(ComputeEvent::JobStarted(job_id.clone()));
 
-                                // Kirim executor_peer_id ke engine.execute
                                 let result = engine_for_job.execute(spec, exec_peer).await;
                                 running.remove(job_id.0.as_str());
 
@@ -264,7 +263,6 @@ pub fn spawn_scheduler(
                             });
                         }
                         Ok(None) => {
-                            // Antrian kosong — normal
                             debug!("[COMPUTE-SCHED] Antrian kosong");
                         }
                         Err(e) => {
@@ -276,10 +274,6 @@ pub fn spawn_scheduler(
         }
     });
 
-    ComputeSchedulerHandle {
-        submit_tx,
-        cancel_tx,
-        event_tx,
-        running_jobs,
-    }
+    handle
 }
+

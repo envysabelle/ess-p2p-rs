@@ -1,9 +1,9 @@
 // src/storage_layer/object.rs
-use super::chunk::{Chunk, derive_object_key};
+use super::chunk::{derive_object_key, Chunk};
 use super::erasure::ErasureEncoder;
-use super::StorageLayer;
 use super::protocol::StorageResponse;
-use sha2::{Sha256, Digest};
+use super::StorageLayer;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ObjectMetadata {
@@ -32,13 +32,18 @@ impl StorageLayer {
     /// Baca metadata objek
     async fn load_object_metadata(&self, object_id: &str) -> Result<ObjectMetadata, String> {
         let store = self.metadata_store.read().unwrap();
-        store.get(object_id).cloned().ok_or_else(|| "Metadata not found".to_string())
+        store
+            .get(object_id)
+            .cloned()
+            .ok_or_else(|| "Metadata not found".to_string())
     }
 
     /// Simpan objek besar dengan chunking (biasa atau erasure-coded).
     pub async fn put_object(&self, object_id: &str, data: &[u8]) -> StorageResponse {
         if data.len() > self.config.max_object_size {
-            return StorageResponse::Error { message: "Object too large".into() };
+            return StorageResponse::Error {
+                message: "Object too large".into(),
+            };
         }
 
         let key = derive_object_key(&self.keystore.master_key(), object_id);
@@ -56,7 +61,8 @@ impl StorageLayer {
         }
 
         // ── Path B: Chunking biasa ────────────────────────────────────────────
-        self.put_object_chunked(object_id, data, &key, object_hash).await
+        self.put_object_chunked(object_id, data, &key, object_hash)
+            .await
     }
 
     /// Simpan object dengan chunking sederhana (tanpa erasure coding).
@@ -97,7 +103,11 @@ impl StorageLayer {
     ) -> StorageResponse {
         let shards = match encoder.encode(data) {
             Ok(s) => s,
-            Err(e) => return StorageResponse::Error { message: format!("Erasure encode error: {}", e) },
+            Err(e) => {
+                return StorageResponse::Error {
+                    message: format!("Erasure encode error: {}", e),
+                }
+            }
         };
         let total_shards = shards.len();
         // Setiap shard di-encrypt dan disimpan sebagai Chunk independen.
@@ -160,7 +170,7 @@ impl StorageLayer {
         self.get_object_chunked(&metadata, &key).await
     }
 
-    /// Ambil object dari DHT menggunakan chunking biasa.
+    /// Ambil object dari DHT menggunakan chunking biasa (dengan DHT get).
     async fn get_object_chunked(
         &self,
         metadata: &ObjectMetadata,
@@ -169,16 +179,23 @@ impl StorageLayer {
         let mut buffer = Vec::new();
         for i in 0..metadata.total_chunks {
             match self.dht.get_chunk(&metadata.object_id, i).await {
-                Some(chunk) => {
+                Ok(Some(chunk)) => {
                     let decrypted = match chunk.decrypt(key) {
                         Ok(d) => d,
                         Err(e) => return StorageResponse::Error { message: e },
                     };
                     buffer.extend_from_slice(&decrypted);
-                },
-                None => return StorageResponse::Error {
-                    message: format!("Missing chunk {}", i),
-                },
+                }
+                Ok(None) => {
+                    return StorageResponse::Error {
+                        message: format!("Missing chunk {}", i),
+                    }
+                }
+                Err(e) => {
+                    return StorageResponse::Error {
+                        message: format!("DHT error for chunk {}: {}", i, e),
+                    }
+                }
             }
         }
 
@@ -205,7 +222,7 @@ impl StorageLayer {
         let mut missing = 0usize;
         for i in 0..total {
             match self.dht.get_chunk(&metadata.object_id, i).await {
-                Some(chunk) => match chunk.decrypt(key) {
+                Ok(Some(chunk)) => match chunk.decrypt(key) {
                     Ok(d) => shards.push(Some(d)),
                     Err(e) => {
                         log::warn!("[STORAGE] Shard {} decrypt gagal: {}; dianggap missing", i, e);
@@ -213,8 +230,13 @@ impl StorageLayer {
                         missing += 1;
                     }
                 },
-                None => {
+                Ok(None) => {
                     log::debug!("[STORAGE] Shard {} tidak ditemukan di DHT", i);
+                    shards.push(None);
+                    missing += 1;
+                }
+                Err(e) => {
+                    log::warn!("[STORAGE] DHT error untuk shard {}: {}; dianggap missing", i, e);
                     shards.push(None);
                     missing += 1;
                 }
@@ -231,9 +253,11 @@ impl StorageLayer {
 
         let buffer = match encoder.decode(&mut shards, metadata.original_size) {
             Ok(d) => d,
-            Err(e) => return StorageResponse::Error {
-                message: format!("Erasure decode gagal (terlalu banyak shard hilang?): {}", e),
-            },
+            Err(e) => {
+                return StorageResponse::Error {
+                    message: format!("Erasure decode gagal (terlalu banyak shard hilang?): {}", e),
+                }
+            }
         };
 
         self.verify_and_return(metadata, buffer)
@@ -256,8 +280,7 @@ impl StorageLayer {
             stats.chunks_served += metadata.total_chunks;
             stats.bytes_served += len;
         }
-        // StorageResponse::Chunk dipakai sementara untuk membawa full object data.
-        // TODO: tambah varian `StorageResponse::Object { data: Vec<u8> }` di protocol.rs
-        StorageResponse::Chunk { chunk_index: 0, data: buffer }
+        // Kembalikan Object (bukan Chunk workaround)
+        StorageResponse::Object { data: buffer }
     }
 }

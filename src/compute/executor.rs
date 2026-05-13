@@ -149,6 +149,7 @@ impl WasmEngine {
             Err(e) => JobStatus::Failed { reason: format!("{e}"), finished_at },
         };
 
+        // ========== PATCH #7b: Isi submitter_peer_id dari spec ==========
         Ok(ComputeResult {
             job_id: spec.job_id.clone(),
             status,
@@ -159,7 +160,9 @@ impl WasmEngine {
             exec_time_ms,
             memory_used_bytes: 0,
             executor_peer_id,
+            submitter_peer_id: spec.submitter_peer_id.clone(), // <-- NEW
             finished_at,
         })
+        // ================================================================
     }
 }

@@ -155,6 +155,19 @@ impl ComputeStore {
         }
     }
 
+    // ========== PATCH #8: Tambah method get_result_bytes untuk pengiriman ==========
+    /// Ambil hasil eksekusi dalam bentuk serialized bytes (untuk keperluan pengiriman via network).
+    /// Mengembalikan `None` jika job_id tidak ditemukan.
+    pub fn get_result_bytes(&self, job_id: &str) -> Option<Vec<u8>> {
+        let key = format!("result:{}", job_id);
+        self.results_tree
+            .get(key.as_bytes())
+            .ok()
+            .flatten()
+            .map(|bytes| bytes.to_vec())
+    }
+    // =================================================================================
+
     /// Jumlah job yang masih ada di antrian.
     pub fn queue_depth(&self) -> usize {
         self.queue_tree.len()

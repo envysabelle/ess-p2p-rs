@@ -13,7 +13,9 @@ use crate::dashboard::{NodeHealth, NodeInfo};
 use crate::authority::Action;
 use crate::network::runtime::governance;
 use crate::crdt_state;
-use crate::storage_layer::protocol::StorageResponse;   // sudah tidak unused karena dipakai di Storage handler
+use crate::storage_layer::protocol::StorageResponse;
+use crate::storage_layer::chunk::Chunk;
+use crate::compute::network::ComputeMessage;
 
 // Onion imports
 use crate::onion::peel_onion_layer;
@@ -24,7 +26,7 @@ use crate::governance::messages::{
     ProposalType, ProposalAnnouncement, VoteMessage, ActivationCertificate,
 };
 
-// Compute imports (PATCH #2)
+// Compute imports
 use crate::compute::network;
 
 use chrono::Utc;
@@ -33,6 +35,7 @@ use hex;
 use libp2p::request_response::{self, Message as RequestResponseMessage};
 use libp2p::swarm::SwarmEvent;
 use libp2p::PeerId;
+use libp2p::kad::{GetRecordOk, GetRecordError}; // struct dan enum error
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::{Arc, OnceLock};
@@ -649,7 +652,6 @@ async fn handle_event(
                             }
                         };
 
-                        // Patch 10d: Gunakan write lock untuk handle_peer_identified
                         let mut world_state_guard = ws_arc.write().unwrap();
                         let accepted = governance::handle_peer_identified(
                             security,
@@ -662,7 +664,7 @@ async fn handle_event(
                             request.timestamp,
                             request.x25519_pubkey.clone(),
                         );
-                        drop(world_state_guard); // write lock dilepas setelah selesai
+                        drop(world_state_guard);
 
                         if let Some(pk_hex) = &request.x25519_pubkey {
                             if let Ok(pk_bytes) = hex::decode(pk_hex) {
@@ -767,8 +769,8 @@ async fn handle_event(
                                             signers: signers.clone(),
                                         };
                                         let cert_data = serde_json::to_vec(&cert).unwrap_or_default();
+                                        let notif_cert = cert.clone();
 
-                                        // 🔥 PATCH 5: Simpan sertifikat aktivasi ke world state
                                         controller.update_world_state(|ws| {
                                             ws.mark_peer_activated(&peer_str);
                                             if let Some(peer_entry) = ws.peer_registry.get_mut(&peer_str) {
@@ -780,8 +782,6 @@ async fn handle_event(
                                         let ctrl = controller.clone();
                                         let target_peer = peer;
 
-                                        // ✅ Patch 4: Kirim notifikasi aktivasi langsung ke peer target
-                                        let notif_cert = cert.clone();
                                         tokio::spawn(async move {
                                             ctrl.send_activation_notification(target_peer, notif_cert).await;
                                             ctrl.publish_verified_peer(target_peer, cert_data).await;
@@ -844,7 +844,7 @@ async fn handle_event(
             }
         }
 
-        // ── Storage handler (DIPERBAIKI) ──
+        // Storage handler
         SwarmEvent::Behaviour(Event::Storage(ev)) => {
             if let request_response::Event::Message { peer, message, .. } = ev {
                 match message {
@@ -875,14 +875,13 @@ async fn handle_event(
 
         // Kademlia
         SwarmEvent::Behaviour(Event::Kademlia(kad_event)) => {
-            use libp2p::kad::{Event as KadEvent, InboundRequest};
+            use libp2p::kad::{Event as KadEvent};
             use crate::kad_store::KadPersistence;
-            use std::env;
 
             match kad_event {
-                KadEvent::InboundRequest { request: InboundRequest::PutRecord { record, .. } } => {
+                KadEvent::InboundRequest { request: libp2p::kad::InboundRequest::PutRecord { record, .. } } => {
                     if let Some(rec) = record {
-                        let store_path = env::var("KAD_STORE_PATH").unwrap_or_else(|_| "data/kad_store".to_string());
+                        let store_path = std::env::var("KAD_STORE_PATH").unwrap_or_else(|_| "data/kad_store".to_string());
                         match KadPersistence::open(&store_path) {
                             Ok(persist) => {
                                 persist.save_record(&rec);
@@ -892,13 +891,13 @@ async fn handle_event(
                         }
                     }
                 }
-                KadEvent::InboundRequest { request: InboundRequest::GetRecord { .. } } => {
+                KadEvent::InboundRequest { request: libp2p::kad::InboundRequest::GetRecord { .. } } => {
                     debug!("[KAD] Incoming GetRecord request processed by MemoryStore.");
                 }
                 KadEvent::RoutingUpdated { peer, .. } => {
                     debug!("[KAD] Routing table updated for peer: {}", peer);
                 }
-                KadEvent::OutboundQueryProgressed { result, .. } => {
+                KadEvent::OutboundQueryProgressed { result, id: query_id, .. } => {
                     use libp2p::kad::QueryResult;
                     match result {
                         QueryResult::Bootstrap(Ok(boot)) => {
@@ -918,6 +917,31 @@ async fn handle_event(
                         QueryResult::PutRecord(Ok(ok)) => {
                             debug!("[KAD] PutRecord success: key={}", hex::encode(ok.key.as_ref()));
                         }
+                        QueryResult::GetRecord(Ok(ok_result)) => {
+                            match ok_result {
+                                GetRecordOk::FoundRecord(peer_record) => {
+                                    let rec = peer_record.record;
+                                    let key_str = String::from_utf8_lossy(rec.key.as_ref());
+                                    if let Some(chunk) = try_deserialize_chunk(&rec.value) {
+                                        controller.complete_kad_get_query(query_id, Ok(Some(chunk)));
+                                    } else {
+                                        debug!("[KAD] GetRecord returned non-chunk data for {}", key_str);
+                                        controller.complete_kad_get_query(query_id, Ok(None));
+                                    }
+                                }
+                                GetRecordOk::FinishedWithNoAdditionalRecord { .. } => {
+                                    debug!("[KAD] GetRecord finished searching.");
+                                }
+                            }
+                        }
+                        QueryResult::GetRecord(Err(GetRecordError::NotFound { key, .. })) => {
+                            debug!("[KAD] GetRecord not found: {:?}", key);
+                            controller.complete_kad_get_query(query_id, Ok(None));
+                        }
+                        QueryResult::GetRecord(Err(e)) => {
+                            warn!("[KAD] GetRecord error: {:?}", e);
+                            controller.complete_kad_get_query(query_id, Err(format!("Kad error: {:?}", e)));
+                        }
                         _ => {}
                     }
                 }
@@ -929,11 +953,16 @@ async fn handle_event(
     }
 }
 
+// Helper untuk deserialisasi chunk dari record value
+fn try_deserialize_chunk(data: &[u8]) -> Option<Chunk> {
+    bincode::deserialize(data).ok()
+}
+
 // == Fungsi direct request (dengan binary body) ==
 async fn handle_direct_request(
     controller: &Arc<NetworkController>,
     security: &Arc<SecurityRuntime>,
-    _dashboard_tx: &mpsc::Sender<DashboardBridgeInput>,
+    dashboard_tx: &mpsc::Sender<DashboardBridgeInput>,
     peer: &PeerId,
     request: &DirectRequest,
     channel: libp2p::request_response::ResponseChannel<DirectResponse>,
@@ -1013,7 +1042,6 @@ async fn handle_direct_request(
                                     };
                                     let cert_data = serde_json::to_vec(&cert).unwrap_or_default();
 
-                                    // 🔥 PATCH 5: Simpan sertifikat aktivasi ke world state
                                     controller.update_world_state(|ws| {
                                         ws.mark_peer_activated(&target);
                                         if let Some(peer_entry) = ws.peer_registry.get_mut(&target) {
@@ -1048,11 +1076,10 @@ async fn handle_direct_request(
         return;
     }
 
-    // ✅ Handler untuk governance.activation_notify
+    // Handler untuk governance.activation_notify
     if request.kind == "governance.activation_notify" {
         if let Ok(cert) = bincode::deserialize::<ActivationCertificate>(body) {
             info!("[GOVERNANCE] Received activation notification: {:?}", cert);
-            // Perbarui state lokal
             controller.update_world_state(|ws| {
                 ws.mark_peer_activated(&cert.target);
                 ws.set_peer_role(&cert.target, "client");
@@ -1112,8 +1139,26 @@ async fn handle_direct_request(
         return;
     }
 
-    // ── Compute message handler (PATCH #2 – updated untuk parameter store) ─
+    // Compute message handler
     if request.kind == "compute" {
+        if let Ok(msg) = serde_json::from_slice::<ComputeMessage>(body) {
+            if let ComputeMessage::Result(result) = msg {
+                if let Some(store) = controller.get_compute_store() {
+                    let _ = store.save_result(&result);
+                }
+                let _ = dashboard_tx
+                    .send(DashboardBridgeInput::ComputeJobResult(result.job_id.0.clone(), result))
+                    .await;
+                let ack = DirectResponse::plain_ok(&request.message_id, &local.to_string(), &peer.to_string(), "result_received");
+                let handle = controller.swarm_handle();
+                let mut guard = handle.lock();
+                if let Some(swarm) = guard.as_mut() {
+                    let _ = swarm.behaviour_mut().direct.send_response(channel, ack);
+                }
+                return;
+            }
+        }
+
         let handle_opt = controller.get_compute_handle();
         if let Some(scheduler) = handle_opt {
             let store_opt = controller.get_compute_store();
@@ -1336,3 +1381,4 @@ async fn send_config_sync(controller: &Arc<NetworkController>, security: &Arc<Se
         Err(e) => warn!("[CONFIG-SYNC] send_direct_message failed: {}", e),
     }
 }
+

@@ -1,3 +1,4 @@
+// src/control_loop.rs
 use crate::network_controller::NetworkController;
 use crate::world_state::{SharedWorldState, WorldState};
 use crate::ghost_runtime::GhostRuntimeHandle;
@@ -424,7 +425,7 @@ impl ControlLoop {
         let _ = self.ghost.publish_event(&event.kind).await;
     }
 
-    // ── Compute event handler (FIXED) ────────────────────────────────────
+    // ── Compute event handler ──────
     async fn handle_compute_event(&self, event: ComputeEvent) {
         match event {
             ComputeEvent::JobQueued(id) => {
@@ -439,13 +440,29 @@ impl ControlLoop {
                     "[CONTROL-LOOP] Compute job completed: {} in {}ms (fuel: {})",
                     id.0, result.exec_time_ms, result.fuel_consumed
                 );
+
+                let submitter = result.submitter_peer_id.clone();
+
                 let _ = self
                     .dashboard_tx
                     .send(DashboardBridgeInput::ComputeJobResult(
                         id.0.clone(),
-                        result,
+                        result.clone(),
                     ))
                     .await;
+
+                // ========== PERBAIKAN ERROR E0599 ==========
+                let ctrl = self.controller.clone();
+                
+                tokio::spawn(async move {
+                    // Pemanggilan associated function langsung dari tipe enum-nya
+                    if let Err(e) = crate::compute::network::ComputeMessage::send_result(&ctrl, &submitter, result).await {
+                        warn!("Failed to send compute result to {}: {}", submitter, e);
+                    } else {
+                        debug!("Compute result sent back to submitter {}", submitter);
+                    }
+                });
+                // ===========================================
             }
             ComputeEvent::JobFailed(id, reason) => {
                 warn!("[CONTROL-LOOP] Compute job failed: {} — {}", id.0, reason);
@@ -459,3 +476,4 @@ impl ControlLoop {
         }
     }
 }
+

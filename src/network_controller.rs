@@ -6,6 +6,8 @@ use crate::gateway::{
 };
 use crate::compute::scheduler::ComputeSchedulerHandle;
 use crate::compute::store::ComputeStore;
+use crate::compute::types::ComputeResult;
+use crate::compute::network::ComputeMessage;
 use crate::ghost_runtime::{GhostActionSink, GhostRuntimeHandle};
 use crate::message::DirectResponse;
 use crate::message::DirectRequest;
@@ -13,12 +15,14 @@ use crate::governance::engine::GovernanceEngine;
 use crate::governance::messages::ActivationCertificate;
 use crate::network::runtime::types::{Behaviour, OnboardRequest, OnboardResponse};
 use crate::security_runtime::SecurityRuntime;
-use crate::storage_layer::StorageLayer; // NEW: Storage Layer
+use crate::storage_layer::StorageLayer;
+use crate::storage_layer::chunk::Chunk;
 use crate::system_event::{SystemEvent, SystemEventKind};
 use crate::world_state::SharedWorldState;
 use crate::onion::OnionNodeKey;
 use crate::id_rotation::next_epoch_seed;
 use libp2p::{request_response::OutboundRequestId, swarm::Swarm, PeerId};
+use libp2p::kad::QueryId;
 use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::error::Error;
@@ -67,7 +71,9 @@ pub struct NetworkController {
     onion_config: Arc<RwLock<Option<(usize, Arc<DashMap<PeerId, X25519PublicKey>>)>>>,
     compute_handle: Arc<RwLock<Option<ComputeSchedulerHandle>>>,
     compute_store: Arc<RwLock<Option<Arc<ComputeStore>>>>,
-    storage_layer: Arc<RwLock<Option<StorageLayer>>>, // NEW
+    storage_layer: Arc<RwLock<Option<StorageLayer>>>,
+    kad_pending: Arc<Mutex<HashMap<QueryId, oneshot::Sender<Result<Option<Chunk>, String>>>>>,
+    compute_result_sender: Arc<Mutex<HashMap<String, oneshot::Sender<Result<ComputeResult, String>>>>>,
     current_rotation_seed: Arc<Mutex<Option<[u8; 32]>>>,
 }
 
@@ -141,7 +147,9 @@ impl NetworkController {
             onion_config: Arc::new(RwLock::new(None)),
             compute_handle: Arc::new(RwLock::new(None)),
             compute_store: Arc::new(RwLock::new(None)),
-            storage_layer: Arc::new(RwLock::new(None)), // NEW
+            storage_layer: Arc::new(RwLock::new(None)),
+            kad_pending: Arc::new(Mutex::new(HashMap::new())),
+            compute_result_sender: Arc::new(Mutex::new(HashMap::new())),
             current_rotation_seed: Arc::new(Mutex::new(None)),
         }
     }
@@ -180,14 +188,12 @@ impl NetworkController {
         *self.onion_config.write().expect("onion_config lock failed") = Some((hops, store));
     }
 
-    // --- Rotasi kunci internal berbasis hash chain ---
     pub fn update_epoch_keys(&self, new_seed: [u8; 32]) {
         let onion_key = derive_static_secret_from_seed(&new_seed, b"onion-key");
         self.set_onion_static_secret(onion_key);
         tracing::info!("[ID-ROTATION] Onion static secret rotated to new epoch");
     }
 
-    /// Lakukan rotasi ID dengan hash chain: ambil current seed, hitung next, simpan, lalu update kunci.
     pub fn rotate_id_seed(&self) {
         let mut current = self.current_rotation_seed.lock();
         if let Some(seed) = *current {
@@ -200,12 +206,10 @@ impl NetworkController {
         }
     }
 
-    /// Set seed awal (dari luar, misal dari governance atau genesis)
     pub fn set_rotation_seed(&self, seed: [u8; 32]) {
         *self.current_rotation_seed.lock() = Some(seed);
     }
 
-    // ── Compute handle management ─────────────────────────────
     pub fn set_compute_handle(&self, handle: ComputeSchedulerHandle) {
         *self.compute_handle.write().unwrap() = Some(handle);
     }
@@ -214,7 +218,6 @@ impl NetworkController {
         self.compute_handle.read().unwrap().clone()
     }
 
-    // ── Compute store management ──────────────────────────────
     pub fn set_compute_store(&self, store: Arc<ComputeStore>) {
         *self.compute_store.write().unwrap() = Some(store);
     }
@@ -223,7 +226,6 @@ impl NetworkController {
         self.compute_store.read().unwrap().clone()
     }
 
-    // ── Storage Layer management ──────────────────────────────
     pub fn set_storage_layer(&self, storage: StorageLayer) {
         *self.storage_layer.write().unwrap() = Some(storage);
     }
@@ -232,7 +234,72 @@ impl NetworkController {
         self.storage_layer.read().unwrap().clone()
     }
 
-    // --- Kirim pesan melalui onion routing (fire-and-forget) ---
+    // ================== NEW DHT GET & COMPUTE RESULT METHODS ==================
+
+    pub async fn register_kad_get_query(
+        &self,
+        query_id: QueryId,
+        sender: oneshot::Sender<Result<Option<Chunk>, String>>,
+    ) -> Result<(), String> {
+        self.kad_pending.lock().insert(query_id, sender);
+        Ok(())
+    }
+
+    pub fn take_kad_pending(&self, query_id: QueryId) -> Option<oneshot::Sender<Result<Option<Chunk>, String>>> {
+        self.kad_pending.lock().remove(&query_id)
+    }
+
+    pub fn complete_kad_get_query(&self, query_id: QueryId, result: Result<Option<Chunk>, String>) {
+        if let Some(sender) = self.take_kad_pending(query_id) {
+            let _ = sender.send(result);
+        }
+    }
+
+    pub fn register_compute_result(&self, job_id: String, sender: oneshot::Sender<Result<ComputeResult, String>>) {
+        self.compute_result_sender.lock().insert(job_id, sender);
+    }
+
+    pub fn take_compute_result(&self, job_id: &str) -> Option<oneshot::Sender<Result<ComputeResult, String>>> {
+        self.compute_result_sender.lock().remove(job_id)
+    }
+
+    pub async fn send_compute_result(
+        &self,
+        target: PeerId,
+        result: ComputeResult,
+    ) -> Result<(), Box<dyn Error + Send>> {
+        let msg = ComputeMessage::Result(result);
+        let payload = serde_json::to_vec(&msg).unwrap_or_default();
+        self.send_typed_message(target, "compute", payload).await
+    }
+
+    pub async fn fetch_chunk_from_peer(
+        &self,
+        target: PeerId,
+        object_id: &str,
+        chunk_index: usize,
+    ) -> Result<Option<Chunk>, String> {
+        let req = crate::storage_layer::protocol::StorageRequest::Get {
+            object_id: object_id.to_string(),
+            chunk_index,
+        };
+        let payload = bincode::serialize(&req).map_err(|e| e.to_string())?;
+        let resp_bytes = self.send_direct_message(target, payload).await.map_err(|e| e.to_string())?;
+        let resp: crate::storage_layer::protocol::StorageResponse = bincode::deserialize(&resp_bytes)
+            .map_err(|e| e.to_string())?;
+        match resp {
+            crate::storage_layer::protocol::StorageResponse::Chunk { data, .. } => {
+                bincode::deserialize(&data).map_err(|e| e.to_string())
+            }
+            crate::storage_layer::protocol::StorageResponse::Object { data: _ } => {
+                Err("Unexpected Object response for single chunk".to_string())
+            }
+            _ => Err("Invalid response".to_string()),
+        }
+    }
+
+    // ================== END NEW METHODS ==================
+
     pub async fn send_onion_message(
         &self,
         payload: Vec<u8>,
