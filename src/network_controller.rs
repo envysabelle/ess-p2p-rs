@@ -5,7 +5,7 @@ use crate::gateway::{
     GatewayRateLimitDecision, GatewayRateLimiter,
 };
 use crate::compute::scheduler::ComputeSchedulerHandle;
-use crate::compute::store::ComputeStore;                      // NEW
+use crate::compute::store::ComputeStore;
 use crate::ghost_runtime::{GhostActionSink, GhostRuntimeHandle};
 use crate::message::DirectResponse;
 use crate::message::DirectRequest;
@@ -13,6 +13,7 @@ use crate::governance::engine::GovernanceEngine;
 use crate::governance::messages::ActivationCertificate;
 use crate::network::runtime::types::{Behaviour, OnboardRequest, OnboardResponse};
 use crate::security_runtime::SecurityRuntime;
+use crate::storage_layer::StorageLayer; // NEW: Storage Layer
 use crate::system_event::{SystemEvent, SystemEventKind};
 use crate::world_state::SharedWorldState;
 use crate::onion::OnionNodeKey;
@@ -65,7 +66,8 @@ pub struct NetworkController {
     onion_static_secret: Arc<RwLock<Option<[u8; 32]>>>,
     onion_config: Arc<RwLock<Option<(usize, Arc<DashMap<PeerId, X25519PublicKey>>)>>>,
     compute_handle: Arc<RwLock<Option<ComputeSchedulerHandle>>>,
-    compute_store: Arc<RwLock<Option<Arc<ComputeStore>>>>,   // NEW
+    compute_store: Arc<RwLock<Option<Arc<ComputeStore>>>>,
+    storage_layer: Arc<RwLock<Option<StorageLayer>>>, // NEW
     current_rotation_seed: Arc<Mutex<Option<[u8; 32]>>>,
 }
 
@@ -138,7 +140,8 @@ impl NetworkController {
             onion_static_secret: Arc::new(RwLock::new(None)),
             onion_config: Arc::new(RwLock::new(None)),
             compute_handle: Arc::new(RwLock::new(None)),
-            compute_store: Arc::new(RwLock::new(None)),   // NEW
+            compute_store: Arc::new(RwLock::new(None)),
+            storage_layer: Arc::new(RwLock::new(None)), // NEW
             current_rotation_seed: Arc::new(Mutex::new(None)),
         }
     }
@@ -211,7 +214,7 @@ impl NetworkController {
         self.compute_handle.read().unwrap().clone()
     }
 
-    // ── Compute store management (NEW) ────────────────────────
+    // ── Compute store management ──────────────────────────────
     pub fn set_compute_store(&self, store: Arc<ComputeStore>) {
         *self.compute_store.write().unwrap() = Some(store);
     }
@@ -220,8 +223,14 @@ impl NetworkController {
         self.compute_store.read().unwrap().clone()
     }
 
-    // ... sisa method sama seperti sebelumnya (tidak diubah) ...
-    // Semua method yang ada di file asli tetap sama, hanya ditambahkan yang di atas.
+    // ── Storage Layer management ──────────────────────────────
+    pub fn set_storage_layer(&self, storage: StorageLayer) {
+        *self.storage_layer.write().unwrap() = Some(storage);
+    }
+
+    pub fn get_storage_layer(&self) -> Option<StorageLayer> {
+        self.storage_layer.read().unwrap().clone()
+    }
 
     // --- Kirim pesan melalui onion routing (fire-and-forget) ---
     pub async fn send_onion_message(

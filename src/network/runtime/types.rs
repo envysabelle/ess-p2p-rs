@@ -18,6 +18,7 @@ use crate::{
     gateway::{GatewayRequest, GatewayResponse},
     message::{DirectRequest, DirectResponse},
     web::{WebRequest, WebResponse},
+    storage_layer::protocol::{StorageRequest, StorageResponse},
 };
 
 // ---------- Onboarding protocol types ----------
@@ -72,6 +73,7 @@ pub struct Behaviour {
     pub gateway: request_response::Behaviour<BincodeCodec<GatewayRequest, GatewayResponse>>,
     pub web: request_response::Behaviour<BincodeCodec<WebRequest, WebResponse>>,
     pub onboard: request_response::Behaviour<BincodeCodec<OnboardRequest, OnboardResponse>>,
+    pub storage: request_response::Behaviour<BincodeCodec<StorageRequest, StorageResponse>>,
 }
 
 /// The unified event type emitted by the `Behaviour`.
@@ -86,6 +88,7 @@ pub enum Event {
     Gateway(request_response::Event<GatewayRequest, GatewayResponse>),
     Web(request_response::Event<WebRequest, WebResponse>),
     Onboard(request_response::Event<OnboardRequest, OnboardResponse>),
+    Storage(request_response::Event<StorageRequest, StorageResponse>),
 }
 
 // ----- FROM implementations -----
@@ -134,6 +137,12 @@ impl From<request_response::Event<WebRequest, WebResponse>> for Event {
 impl From<request_response::Event<OnboardRequest, OnboardResponse>> for Event {
     fn from(value: request_response::Event<OnboardRequest, OnboardResponse>) -> Self {
         Self::Onboard(value)
+    }
+}
+
+impl From<request_response::Event<StorageRequest, StorageResponse>> for Event {
+    fn from(value: request_response::Event<StorageRequest, StorageResponse>) -> Self {
+        Self::Storage(value)
     }
 }
 

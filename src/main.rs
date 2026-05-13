@@ -38,6 +38,9 @@ mod id_rotation;
 // ── Compute Layer (NEW) ──────────────────────────────────────────────────────
 mod compute;
 
+// ── Storage Layer (Sharded DHT) ──────────────────────────────────────────────
+mod storage_layer;
+
 use std::{
     env, error::Error, fs,
     io,
@@ -81,6 +84,9 @@ use compute::{
     scheduler::{spawn_scheduler, SchedulerConfig, ComputeSchedulerHandle},
     executor::WasmEngine,
 };
+
+// ── Storage Layer use ────────────────────────────────────────────────────────
+use storage_layer::{StorageLayer, StorageLayerConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LifecyclePhase {
@@ -628,14 +634,14 @@ async fn bootstrap_runtime(
                             sched_config,
                             store.clone(),
                             engine,
-                            authority_arc,
+                            authority_arc.clone(),
                             ess.peer_id().to_string(),
                         );
 
                         // Simpan handle ke controller
                         controller_arc.set_compute_handle(handle.clone());
                         controller_arc.set_compute_store(store.clone());
-			compute_handle = Some(handle);
+                        compute_handle = Some(handle);
                         compute_store_arc = Some(store);
                         info!("[BOOT] Compute Layer OK — WASM runtime aktif");
                     }
@@ -652,6 +658,17 @@ async fn bootstrap_runtime(
         info!("[BOOT] Compute Layer dinonaktifkan (set ESS_COMPUTE_ENABLED=true untuk mengaktifkan)");
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    //  Inisialisasi Storage Layer (DIPERBAIKI: tambahkan argumen ke-4 controller_arc)
+    // ═══════════════════════════════════════════════════════════════
+    let storage_layer = StorageLayer::new(
+        StorageLayerConfig::default(),
+        keystore.clone(),
+        authority_arc.clone(),
+        controller_arc.clone(),
+    );
+    controller_arc.set_storage_layer(storage_layer.clone());
+
     // Bangun DashboardService dengan compute layer jika tersedia
     let db_store = DashboardStore::new();
     let mut db_service_builder = DashboardService::new(db_store.clone())
@@ -662,6 +679,10 @@ async fn bootstrap_runtime(
 
     if let (Some(handle), Some(store)) = (compute_handle.clone(), compute_store_arc.clone()) {
         db_service_builder = db_service_builder.with_compute(handle, store);
+    }
+    // Tambahkan storage layer ke dashboard service
+    if let Some(storage) = Some(storage_layer.clone()) {
+        db_service_builder = db_service_builder.with_storage(storage);
     }
 
     let db_service = db_service_builder;

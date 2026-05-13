@@ -13,13 +13,13 @@ use crate::dashboard::{NodeHealth, NodeInfo};
 use crate::authority::Action;
 use crate::network::runtime::governance;
 use crate::crdt_state;
+use crate::storage_layer::protocol::StorageResponse;   // sudah tidak unused karena dipakai di Storage handler
 
 // Onion imports
 use crate::onion::peel_onion_layer;
 use crate::message::{EssRequest, EssResponse, OnionRelayRequest, OnionRelayResponse};
 use super::runner::RuntimeContext;
 use crate::pqc;
-
 use crate::governance::messages::{
     ProposalType, ProposalAnnouncement, VoteMessage, ActivationCertificate,
 };
@@ -649,7 +649,7 @@ async fn handle_event(
                             }
                         };
 
-                        // Patch 10d: Ganti read lock menjadi write lock untuk handle_peer_identified
+                        // Patch 10d: Gunakan write lock untuk handle_peer_identified
                         let mut world_state_guard = ws_arc.write().unwrap();
                         let accepted = governance::handle_peer_identified(
                             security,
@@ -844,6 +844,35 @@ async fn handle_event(
             }
         }
 
+        // ── Storage handler (DIPERBAIKI) ──
+        SwarmEvent::Behaviour(Event::Storage(ev)) => {
+            if let request_response::Event::Message { peer, message, .. } = ev {
+                match message {
+                    RequestResponseMessage::Request { request, channel, .. } => {
+                        if !controller.enforce(&peer, Action::Connect).await {
+                            let resp = StorageResponse::Error { message: "access denied".into() };
+                            let handle = controller.swarm_handle();
+                            let mut guard = handle.lock();
+                            if let Some(swarm) = guard.as_mut() {
+                                let _ = swarm.behaviour_mut().storage.send_response(channel, resp);
+                            }
+                            return;
+                        }
+
+                        if let Some(storage) = controller.get_storage_layer() {
+                            let response = storage.handle_request(request, &peer.to_string()).await;
+                            let handle = controller.swarm_handle();
+                            let mut guard = handle.lock();
+                            if let Some(swarm) = guard.as_mut() {
+                                let _ = swarm.behaviour_mut().storage.send_response(channel, response);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // Kademlia
         SwarmEvent::Behaviour(Event::Kademlia(kad_event)) => {
             use libp2p::kad::{Event as KadEvent, InboundRequest};
@@ -1026,7 +1055,6 @@ async fn handle_direct_request(
             // Perbarui state lokal
             controller.update_world_state(|ws| {
                 ws.mark_peer_activated(&cert.target);
-                // Role bisa disesuaikan sesuai kebutuhan, sementara pakai client
                 ws.set_peer_role(&cert.target, "client");
             });
         }
@@ -1088,7 +1116,6 @@ async fn handle_direct_request(
     if request.kind == "compute" {
         let handle_opt = controller.get_compute_handle();
         if let Some(scheduler) = handle_opt {
-            // Ambil compute store dari controller jika tersedia
             let store_opt = controller.get_compute_store();
             let reply = network::handle_incoming_compute_message(
                 body,
@@ -1114,7 +1141,6 @@ async fn handle_direct_request(
             }
             return;
         } else {
-            // Compute layer belum aktif, balas error
             let resp = DirectResponse::plain_error(
                 &request.message_id,
                 &local.to_string(),

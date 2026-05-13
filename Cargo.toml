@@ -29,6 +29,8 @@ rand = "0.8"
 pbkdf2 = { version = "0.12", features = ["simple"] }
 hkdf = "0.12"
 
+reed-solomon-erasure = "6"   # Erasure coding untuk efisiensi replikasi
+
 # Networking (P2P)
 libp2p = { version = "0.56", features = [
   "tcp",

@@ -2,7 +2,6 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use super::service::DashboardService;
-
 // ── Compute-related imports (PATCH #6) ────────────────────────────────
 use crate::compute::types::ComputeJobSpec;
 
@@ -52,6 +51,9 @@ pub async fn dashboard_payload(service: &DashboardService) -> Value {
     let summary = service.summary().await;
     let world = world_payload(service);
 
+    // Storage stats integration (from patch)
+    let storage_stats = service.storage_stats();
+
     json!({
         "ok": true,
         "timestamp": now(),
@@ -86,6 +88,12 @@ pub async fn dashboard_payload(service: &DashboardService) -> Value {
             "trusted_peers": summary.trusted_peers,
         },
         "world": world,
+        "storage": {
+            "objects_stored": storage_stats.objects_stored,
+            "chunks_stored": storage_stats.chunks_stored,
+            "bytes_stored": storage_stats.bytes_stored,
+            "bytes_served": storage_stats.bytes_served,
+        },
         "status": summary.status,
     })
 }

@@ -10,6 +10,9 @@ use crate::world_state::{SharedWorldState, WorldStateSnapshot};
 use crate::compute::scheduler::ComputeSchedulerHandle;
 use crate::compute::store::ComputeStore;
 
+// ── Storage Layer import ──────────────────────────────────────────────
+use crate::storage_layer::{StorageLayer, StorageStats};
+
 use super::model::{DashboardSummary, LogEvent, NodeHealth, NodeInfo, RouteInfo};
 use super::store::DashboardStore;
 
@@ -20,8 +23,9 @@ pub struct DashboardService {
     security: Option<Arc<SecurityRuntime>>,
     authority: Option<AuthorityManager>,
     controller: Option<Arc<NetworkController>>,
-    compute_handle: Option<ComputeSchedulerHandle>,   // NEW
-    compute_store: Option<Arc<ComputeStore>>,          // NEW
+    compute_handle: Option<ComputeSchedulerHandle>,
+    compute_store: Option<Arc<ComputeStore>>,
+    storage_layer: Option<StorageLayer>,          // NEW
 }
 
 impl DashboardService {
@@ -32,8 +36,9 @@ impl DashboardService {
             security: None,
             authority: None,
             controller: None,
-            compute_handle: None,   // NEW
-            compute_store: None,    // NEW
+            compute_handle: None,
+            compute_store: None,
+            storage_layer: None,                  // NEW
         }
     }
 
@@ -68,11 +73,17 @@ impl DashboardService {
         self
     }
 
+    // ── Setter untuk storage layer ──────────────────────────────────────
+    pub fn with_storage(mut self, storage: StorageLayer) -> Self {
+        self.storage_layer = Some(storage);
+        self
+    }
+
     pub fn store(&self) -> DashboardStore {
         self.store.clone()
     }
 
-    // ── Getter untuk compute layer (PATCH #7) ─────────────────────────
+    // ── Getter untuk compute layer ────────────────────────────────────
     pub fn compute_handle(&self) -> Result<&ComputeSchedulerHandle, String> {
         self.compute_handle
             .as_ref()
@@ -115,6 +126,14 @@ impl DashboardService {
     pub fn compute_db_stats(&self) -> Result<serde_json::Value, String> {
         let store = self.compute_store()?;
         Ok(store.db_stats())
+    }
+
+    // ── Storage stats ───────────────────────────────────────────────
+    pub fn storage_stats(&self) -> StorageStats {
+        self.storage_layer
+            .as_ref()
+            .map(|s| s.get_stats())
+            .unwrap_or_default()
     }
 
     pub fn world_snapshot(&self) -> Option<WorldStateSnapshot> {

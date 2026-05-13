@@ -19,6 +19,7 @@ use crate::codec::BincodeCodec;
 use crate::identity::EssIdentity;
 use crate::kad_store::KadPersistence;
 
+use crate::storage_layer::protocol::{StorageRequest, StorageResponse};
 use super::types::{Behaviour, OnboardRequest, OnboardResponse};
 use super::{CONFIG_PROTOCOL, DIRECT_PROTOCOL, GATEWAY_PROTOCOL, PROTOCOL_VERSION, WEB_PROTOCOL};
 
@@ -63,6 +64,9 @@ pub fn create_swarm(ess: &EssIdentity) -> Result<RuntimeSwarm, Box<dyn Error>> {
             let onboard_codec = BincodeCodec::<OnboardRequest, OnboardResponse>::new(
                 StreamProtocol::new(ONBOARD_PROTOCOL),
             );
+            let storage_codec = BincodeCodec::<StorageRequest, StorageResponse>::new(
+                StreamProtocol::new("/ess/storage/1"),
+            );
 
             // -- protocol behaviours --
             let direct = request_response::Behaviour::with_codec(
@@ -95,6 +99,12 @@ pub fn create_swarm(ess: &EssIdentity) -> Result<RuntimeSwarm, Box<dyn Error>> {
                 request_response::Config::default(),
             );
 
+            let storage = request_response::Behaviour::with_codec(
+                storage_codec,
+                [(StreamProtocol::new("/ess/storage/1"), ProtocolSupport::Full)],
+                request_response::Config::default(),
+            );
+
             Ok(Behaviour {
                 ping: ping::Behaviour::default(),
                 identify: identify::Behaviour::new(
@@ -111,6 +121,7 @@ pub fn create_swarm(ess: &EssIdentity) -> Result<RuntimeSwarm, Box<dyn Error>> {
                 gateway,
                 web,
                 onboard,
+                storage,
             })
         })?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60 * 60)))

@@ -15,6 +15,7 @@ const KEYSTORE_PATH: &str = "data/keystore.enc";
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 
+#[derive(Clone, Debug)]
 pub struct SoftwareKeystore {
     master_key: [u8; 32],
 }
