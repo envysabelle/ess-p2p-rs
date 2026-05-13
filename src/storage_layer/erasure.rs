@@ -3,8 +3,10 @@
 //! Total shards = k + m, hanya butuh k untuk rekonstruksi
 
 use reed_solomon_erasure::galois_8::ReedSolomon;
+use std::fmt;
 
 /// Konfigurasi erasure coding
+#[derive(Debug, Clone)]
 pub struct ErasureConfig {
     pub data_shards: usize,   // k
     pub parity_shards: usize, // m
@@ -24,6 +26,14 @@ pub struct ErasureEncoder {
     encoder: ReedSolomon,
 }
 
+impl fmt::Debug for ErasureEncoder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ErasureEncoder")
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
 impl ErasureEncoder {
     pub fn new(config: ErasureConfig) -> Result<Self, String> {
         let encoder = ReedSolomon::new(config.data_shards, config.parity_shards)
@@ -34,7 +44,6 @@ impl ErasureEncoder {
     /// Encode data menjadi beberapa shard (ukuran sama).
     /// Data dipecah menjadi blok, ditambahkan parity shards.
     pub fn encode(&self, data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-        // Pastikan data bisa dibagi rata oleh data_shards, padding jika perlu
         let shard_size = (data.len() + self.config.data_shards - 1) / self.config.data_shards;
         let mut shards = Vec::with_capacity(self.config.data_shards + self.config.parity_shards);
         for i in 0..self.config.data_shards {
@@ -53,11 +62,10 @@ impl ErasureEncoder {
         Ok(shards)
     }
 
-    /// Decode dari shards yang mungkin hilang (harus ada minimal k data shards)
-    pub fn decode(&self, shards: &mut [Option<Vec<u8>>]) -> Result<Vec<u8>, String> {
-        // reconstruct membutuhkan mutable slices
+    /// Decode dari shards yang mungkin hilang (harus ada minimal k data shards).
+    /// `original_size` digunakan untuk memotong padding setelah rekonstruksi.
+    pub fn decode(&self, shards: &mut [Option<Vec<u8>>], original_size: usize) -> Result<Vec<u8>, String> {
         self.encoder.reconstruct(shards).map_err(|e| e.to_string())?;
-        // Gabungkan data dari data_shards pertama yang tidak None
         let mut data = Vec::new();
         for shard in shards.iter().take(self.config.data_shards) {
             if let Some(ref s) = shard {
@@ -66,7 +74,10 @@ impl ErasureEncoder {
                 return Err("Missing data shard after reconstruction".into());
             }
         }
-        // Potong sesuai ukuran asli jika ada padding (tidak ditangani di sini, asumsikan tanpa padding)
+        // Potong sesuai original_size untuk menghilangkan padding
+        if original_size < data.len() {
+            data.truncate(original_size);
+        }
         Ok(data)
     }
 }

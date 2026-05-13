@@ -1,6 +1,6 @@
 //! ESS Sharded DHT Storage Layer
 //!
-//! Menyediakan penyimpanan objek terdistribusi dengan:
+//! Menyediakan penyimpanan objek terdistribusi dengan fitur penuh:
 //! - Enkripsi per chunk (AES-256-GCM)
 //! - Sharding: objek besar dipecah menjadi chunk 1 MB
 //! - Replikasi: setiap chunk disimpan di k node terdekat (default k=3)
@@ -20,6 +20,7 @@ use crate::authority::{AuthorityManager, Action};
 use crate::keystore::SoftwareKeystore;
 use crate::network_controller::NetworkController;
 use libp2p::PeerId;
+use erasure::{ErasureConfig, ErasureEncoder};
 use dashmap::DashMap;
 use parking_lot::Mutex;
 
@@ -57,6 +58,8 @@ pub struct StorageLayer {
     pub stats: Arc<Mutex<StorageStats>>,
     pub controller: Arc<NetworkController>,
     pub metadata_store: Arc<RwLock<HashMap<String, ObjectMetadata>>>,
+    /// Encoder erasure aktif hanya jika `config.use_erasure_coding == true`.
+    pub erasure_encoder: Option<Arc<ErasureEncoder>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -78,6 +81,23 @@ impl StorageLayer {
         authority: Arc<AuthorityManager>,
         controller: Arc<NetworkController>,
     ) -> Self {
+        // Bangun ErasureEncoder jika erasure coding diaktifkan di config.
+        // Gunakan ErasureConfig::default() (k=4, m=2) kecuali ada config custom di masa depan.
+        let erasure_encoder = if config.use_erasure_coding {
+            match ErasureEncoder::new(ErasureConfig::default()) {
+                Ok(enc) => {
+                    log::info!("[STORAGE] Erasure coding aktif (4 data shards, 2 parity shards)");
+                    Some(Arc::new(enc))
+                }
+                Err(e) => {
+                    log::warn!("[STORAGE] Gagal inisialisasi ErasureEncoder: {}; fallback ke chunking biasa", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             config,
             keystore,
@@ -87,6 +107,7 @@ impl StorageLayer {
             stats: Arc::new(Mutex::new(StorageStats::default())),
             controller,
             metadata_store: Arc::new(RwLock::new(HashMap::new())),
+            erasure_encoder,
         }
     }
 

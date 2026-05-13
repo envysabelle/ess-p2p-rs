@@ -1,5 +1,6 @@
 //! Protocol types for the Sharded DHT Storage Layer.
 //! Defines request/response envelopes exchanged between peers over the `/ess/storage/1` protocol.
+//! Lihat `object.rs::verify_and_return` yang menggunakan Chunk sementara untuk full-object data.
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +36,11 @@ pub enum StorageResponse {
     /// A single chunk (used for chunk retrieval; later a full-object response may be added).
     Chunk {
         chunk_index: usize,
+        data: Vec<u8>,
+    },
+    /// Full object data setelah semua chunks/shards direkonstruksi dan diverifikasi.
+    /// Dipakai `get_object` setelah patch object.rs mengganti workaround Chunk { chunk_index: 0 }.
+    Object {
         data: Vec<u8>,
     },
     /// Operation completed successfully (e.g., after a Put).
