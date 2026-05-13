@@ -8,7 +8,7 @@
 //! 4. Worker loop: ambil dari antrian → execute → simpan hasil → broadcast
 //! 5. Track job yang sedang berjalan (mencegah duplikasi)
 //! 6. Handle cancellation dari governance                                              
-use crate::authority::AuthorityManager;  // Hapus Action karena tidak dipakai
+use crate::authority::{Action, AuthorityManager};
 use crate::compute::executor::WasmEngine;
 use crate::compute::network::NodeCapacity;
 use crate::compute::store::ComputeStore;                                                
@@ -20,7 +20,7 @@ use libp2p::PeerId;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// Konfigurasi scheduler
 #[derive(Debug, Clone)]                                                                 
@@ -60,6 +60,7 @@ pub struct ComputeSchedulerHandle {
     cancel_tx: mpsc::Sender<JobId>,
     event_tx: broadcast::Sender<ComputeEvent>,
     running_jobs: Arc<DashMap<String, CancellationToken>>,
+    authority: Arc<AuthorityManager>, // <-- FIX: Tambahkan authority manager
 }
 
 impl ComputeSchedulerHandle {
@@ -67,16 +68,20 @@ impl ComputeSchedulerHandle {
     pub async fn submit_job(&self, spec: ComputeJobSpec) -> Result<JobId, ComputeError> {
         let id = spec.job_id.clone();
 
-        // ========== PATCH #6: Validasi authority DI SINI (sebelum masuk channel) ==========
-        // Sementara variabel tidak dipakai karena authority check belum penuh
-        let _peer_id = spec.submitter_peer_id
+        let peer_id = spec.submitter_peer_id
             .parse::<PeerId>()
             .map_err(|_| ComputeError::InvalidSpec("invalid submitter_peer_id".into()))?;
 
-        // Validasi job spec secara menyeluruh
+        // ========== FIX: Validasi Authority Role (RBAC) ==========
+        if !self.authority.is_allowed(&peer_id, Action::ComputeSubmit) {
+            return Err(ComputeError::AuthorityDenied("peer tidak diizinkan submit job komputasi".into()));
+        }
+        // =========================================================
+
+        // Validasi job spec secara menyeluruh (akan mengeksekusi cek signature dari types.rs)
         spec.validate().map_err(|e| ComputeError::InvalidSpec(e.to_string()))?;
 
-        // Kirim ke channel (validasi authority sudah selesai)
+        // Kirim ke channel worker
         self.submit_tx
             .send(spec)
             .await
@@ -86,11 +91,9 @@ impl ComputeSchedulerHandle {
 
     /// Batalkan job yang sedang berjalan atau masih di antrian.
     pub async fn cancel_job(&self, job_id: JobId) -> Result<(), ComputeError> {
-        // Batalkan via CancellationToken jika sedang running
         if let Some(token) = self.running_jobs.get(job_id.0.as_str()) {
             token.cancel();
         }
-        // Kirim ke channel untuk cleanup dari store
         self.cancel_tx
             .send(job_id)
             .await
@@ -98,17 +101,14 @@ impl ComputeSchedulerHandle {
         Ok(())
     }
 
-    /// Subscribe ke event stream
     pub fn subscribe_events(&self) -> broadcast::Receiver<ComputeEvent> {
         self.event_tx.subscribe()
     }
 
-    /// Jumlah job yang sedang berjalan
     pub fn running_count(&self) -> usize {
         self.running_jobs.len()
     }
 
-    /// Publikasikan kapasitas node ke DHT (dipanggil oleh ControlLoop secara berkala).
     pub async fn publish_capacity(
         &self,
         peer_id: &str,
@@ -117,7 +117,6 @@ impl ComputeSchedulerHandle {
         let capacity = NodeCapacity::current(peer_id, self);
         let msg = crate::compute::network::ComputeMessage::Capacity(capacity);
         let payload = serde_json::to_vec(&msg).unwrap_or_default();
-        // Ambil handle swarm dan simpan record di Kademlia DHT
         let handle = controller.swarm_handle();
         let mut guard = handle.lock();
         if let Some(swarm) = guard.as_mut() {
@@ -133,7 +132,7 @@ pub fn spawn_scheduler(
     config: SchedulerConfig,
     store: Arc<ComputeStore>,
     engine: WasmEngine,
-    _authority: Arc<AuthorityManager>,  // Ubah jadi _authority karena belum dipakai
+    authority: Arc<AuthorityManager>,  // <-- FIX: Variabel ini sekarang digunakan
     node_peer_id: String,
 ) -> ComputeSchedulerHandle {
     let (submit_tx, mut submit_rx) = mpsc::channel::<ComputeJobSpec>(256);
@@ -145,7 +144,6 @@ pub fn spawn_scheduler(
     let running_jobs_clone = running_jobs.clone();
     let store_clone = store.clone();
     let engine = engine;
-    // Hapus authority_clone karena tidak dipakai
     let executor_peer_id = node_peer_id.clone();
 
     // Handle yang dikembalikan
@@ -154,6 +152,7 @@ pub fn spawn_scheduler(
         cancel_tx: cancel_tx.clone(),
         event_tx: event_tx.clone(),
         running_jobs: running_jobs.clone(),
+        authority, // <-- Injeksi instance authority ke handle
     };
 
     tokio::spawn(async move {
@@ -168,14 +167,11 @@ pub fn spawn_scheduler(
 
         loop {
             tokio::select! {
-                // ── Terima job submission baru ──────────────────────────────
                 Some(spec) = submit_rx.recv() => {
-                    // Note: authority check sudah dilakukan di submit_job,
-                    // jadi di sini tidak perlu diulang.
-                    // Validasi signature job (production-ready) – tetap dipertahankan
+                    // Validasi akhir tambahan jika diperlukan
                     if let Err(e) = spec.validate() {
                         warn!(
-                            "[COMPUTE-SCHED] Job {} signature invalid: {}. Discarding.",
+                            "[COMPUTE-SCHED] Job {} ditolak (signature/integrity failed): {}",
                             spec.job_id.0, e
                         );
                         let _ = event_tx_clone.send(ComputeEvent::JobFailed(
@@ -185,14 +181,9 @@ pub fn spawn_scheduler(
                         continue;
                     }
 
-                    // Masukkan ke persistent store
                     match store_clone.enqueue(&spec) {
                         Ok(()) => {
-                            info!(
-                                "[COMPUTE-SCHED] Job {} di-queue (depth={})",
-                                spec.job_id.0,
-                                store_clone.queue_depth()
-                            );
+                            info!("[COMPUTE-SCHED] Job {} di-queue (depth={})", spec.job_id.0, store_clone.queue_depth());
                             let _ = event_tx_clone.send(ComputeEvent::JobQueued(spec.job_id));
                         }
                         Err(e) => {
@@ -201,7 +192,6 @@ pub fn spawn_scheduler(
                     }
                 }
 
-                // ── Terima cancellation request ─────────────────────────────
                 Some(job_id) = cancel_rx.recv() => {
                     if let Some((_, token)) = running_jobs_clone.remove(job_id.0.as_str()) {
                         token.cancel();
@@ -210,7 +200,6 @@ pub fn spawn_scheduler(
                     }
                 }
 
-                // ── Poll antrian: ambil dan eksekusi job ────────────────────
                 _ = poll_ticker.tick() => {
                     if running_jobs_clone.len() >= config.max_concurrent_jobs {
                         continue;
@@ -262,12 +251,8 @@ pub fn spawn_scheduler(
                                 }
                             });
                         }
-                        Ok(None) => {
-                            debug!("[COMPUTE-SCHED] Antrian kosong");
-                        }
-                        Err(e) => {
-                            error!("[COMPUTE-SCHED] Error baca antrian: {}", e);
-                        }
+                        Ok(None) => {}
+                        Err(e) => error!("[COMPUTE-SCHED] Error baca antrian: {}", e),
                     }
                 }
             }

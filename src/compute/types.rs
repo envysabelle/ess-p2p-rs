@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+// <-- FIX: Import dalek verifier
+use ed25519_dalek::{PublicKey, Signature as DalekSignature, Verifier};
+
 // ── Konstanta batas keamanan ────────────────────────────────────────────────
 
 /// Batas maksimum ukuran bytecode WASM yang bisa disubmit (4 MB)
@@ -187,10 +190,27 @@ impl ComputeJobSpec {
         }
         // Resource limits
         self.limits.validate()?;
+        
         // Submitter tidak boleh kosong
         if self.submitter_peer_id.is_empty() {
             return Err(ComputeError::InvalidSpec("submitter_peer_id kosong".into()));
         }
+
+        // ========== FIX: Verifikasi Kriptografi Signature Ed25519 ==========
+        if self.signature.is_empty() || self.submitter_pubkey.is_empty() {
+            return Err(ComputeError::InvalidSpec("signature atau submitter_pubkey kosong".into()));
+        }
+
+        let pubkey = PublicKey::from_bytes(&self.submitter_pubkey)
+            .map_err(|_| ComputeError::InvalidSpec("format submitter_pubkey tidak valid".into()))?;
+
+        let sig = DalekSignature::from_bytes(&self.signature)
+            .map_err(|_| ComputeError::InvalidSpec("format signature tidak valid".into()))?;
+
+        pubkey.verify(&self.signing_bytes(), &sig)
+            .map_err(|_| ComputeError::InvalidSpec("verifikasi signature gagal (job ditempa atau korup)".into()))?;
+        // ===================================================================
+
         // Timestamp tidak terlalu lama (15 menit)
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -259,10 +279,8 @@ pub struct ComputeResult {
     pub memory_used_bytes: u64,
     /// Node yang mengeksekusi job ini
     pub executor_peer_id: String,
-    // ========== PATCH #7a: Tambah submitter_peer_id untuk callback ==========
     /// Submitter yang mengirim job (untuk callback hasil)
     pub submitter_peer_id: String,
-    // ========================================================================
     /// Timestamp selesai
     pub finished_at: u64,
 }
@@ -305,5 +323,3 @@ pub enum ComputeError {
     NotInitialized,
 }
 
-// NOTE: thiserror dibutuhkan — tambahkan ke Cargo.toml:
-// thiserror = "1"
