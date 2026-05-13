@@ -23,20 +23,25 @@ pub struct ObjectMetadata {
 }
 
 impl StorageLayer {
-    /// Simpan metadata objek ke dalam map lokal (dummy, nanti bisa DHT)
+    /// ========== FIX: Persistensi Metadata ke Sled Database ==========
     async fn save_object_metadata(&self, meta: &ObjectMetadata) {
-        let mut store = self.metadata_store.write().unwrap();
-        store.insert(meta.object_id.clone(), meta.clone());
+        if let Ok(bytes) = bincode::serialize(meta) {
+            let _ = self.metadata_db.insert(meta.object_id.as_bytes(), bytes);
+            let _ = self.metadata_db.flush_async().await;
+        }
     }
 
-    /// Baca metadata objek
+    /// Baca metadata objek dari sled
     async fn load_object_metadata(&self, object_id: &str) -> Result<ObjectMetadata, String> {
-        let store = self.metadata_store.read().unwrap();
-        store
-            .get(object_id)
-            .cloned()
-            .ok_or_else(|| "Metadata not found".to_string())
+        match self.metadata_db.get(object_id.as_bytes()) {
+            Ok(Some(bytes)) => {
+                bincode::deserialize(&bytes).map_err(|e| format!("Gagal deserialize metadata: {}", e))
+            }
+            Ok(None) => Err("Metadata not found".to_string()),
+            Err(e) => Err(format!("Gagal membaca DB metadata: {}", e)),
+        }
     }
+    // ===============================================================
 
     /// Simpan objek besar dengan chunking (biasa atau erasure-coded).
     pub async fn put_object(&self, object_id: &str, data: &[u8]) -> StorageResponse {
@@ -56,7 +61,6 @@ impl StorageLayer {
                     .put_object_erasure(object_id, data, &key, object_hash, encoder)
                     .await;
             }
-            // Encoder tidak tersedia (inisialisasi gagal) → fallthrough ke chunking biasa
             log::warn!("[STORAGE] use_erasure_coding=true tapi encoder None, fallback ke chunking");
         }
 
@@ -88,6 +92,7 @@ impl StorageLayer {
             original_size: data.len(),
             use_erasure_coding: false,
         };
+
         self.save_object_metadata(&metadata).await;
         self.store_chunks(object_id, &chunks).await
     }
@@ -109,6 +114,7 @@ impl StorageLayer {
                 }
             }
         };
+
         let total_shards = shards.len();
         // Setiap shard di-encrypt dan disimpan sebagai Chunk independen.
         let chunks: Vec<Chunk> = shards
@@ -126,6 +132,7 @@ impl StorageLayer {
             original_size: data.len(),
             use_erasure_coding: true,
         };
+
         self.save_object_metadata(&metadata).await;
         self.store_chunks(object_id, &chunks).await
     }
@@ -133,17 +140,21 @@ impl StorageLayer {
     /// Simpan semua chunks ke DHT dan update stats.
     async fn store_chunks(&self, _object_id: &str, chunks: &[Chunk]) -> StorageResponse {
         for chunk in chunks {
-            let peers: Vec<libp2p::PeerId> = Vec::new(); // nanti diisi replication targets
-            if let Err(e) = self.dht.put_chunk(chunk.clone(), peers).await {
+            let peers: Vec<libp2p::PeerId> = Vec::new(); // Dikosongkan karena Kademlia akan otomatis mencari nodes terdekat
+            
+            // ========== FIX: Kirim replication_factor ke dht_store ==========
+            if let Err(e) = self.dht.put_chunk(chunk.clone(), peers, self.config.replication_factor).await {
                 return StorageResponse::Error {
                     message: format!("Failed to store chunk {}: {}", chunk.chunk_index, e),
                 };
             }
         }
+
         let mut stats = self.stats.lock();
         stats.objects_stored += 1;
         stats.chunks_stored += chunks.len();
         stats.bytes_stored += chunks.iter().map(|c| c.encrypted_data.len()).sum::<usize>();
+
         StorageResponse::Success
     }
 
@@ -156,131 +167,80 @@ impl StorageLayer {
 
         let key = derive_object_key(&self.keystore.master_key(), object_id);
 
-        // ── Path A: Erasure Coding ────────────────────────────────────────────
         if metadata.use_erasure_coding {
-            if let Some(ref encoder) = self.erasure_encoder {
-                return self.get_object_erasure(&metadata, &key, encoder).await;
-            }
-            return StorageResponse::Error {
-                message: "Metadata menandai erasure coding tapi encoder tidak tersedia".into(),
-            };
+            self.get_object_erasure(object_id, metadata, &key).await
+        } else {
+            self.get_object_chunked(object_id, metadata, &key).await
         }
-
-        // ── Path B: Chunking biasa ────────────────────────────────────────────
-        self.get_object_chunked(&metadata, &key).await
     }
 
-    /// Ambil object dari DHT menggunakan chunking biasa (dengan DHT get).
     async fn get_object_chunked(
         &self,
-        metadata: &ObjectMetadata,
+        object_id: &str,
+        metadata: ObjectMetadata,
         key: &[u8; 32],
     ) -> StorageResponse {
-        let mut buffer = Vec::new();
+        let mut object_data = Vec::new();
+
         for i in 0..metadata.total_chunks {
-            match self.dht.get_chunk(&metadata.object_id, i).await {
-                Ok(Some(chunk)) => {
-                    let decrypted = match chunk.decrypt(key) {
-                        Ok(d) => d,
-                        Err(e) => return StorageResponse::Error { message: e },
-                    };
-                    buffer.extend_from_slice(&decrypted);
-                }
-                Ok(None) => {
-                    return StorageResponse::Error {
-                        message: format!("Missing chunk {}", i),
-                    }
-                }
-                Err(e) => {
-                    return StorageResponse::Error {
-                        message: format!("DHT error for chunk {}: {}", i, e),
-                    }
-                }
+            match self.dht.get_chunk(object_id, i).await {
+                Ok(Some(chunk)) => match chunk.decrypt(key) {
+                    Ok(plain) => object_data.extend_from_slice(&plain),
+                    Err(e) => return StorageResponse::Error { message: format!("Decryption error chunk {}: {}", i, e) },
+                },
+                Ok(None) => return StorageResponse::Error { message: format!("Chunk {} not found on network", i) },
+                Err(e) => return StorageResponse::Error { message: format!("DHT error chunk {}: {}", i, e) },
             }
         }
 
-        self.verify_and_return(metadata, buffer)
+        let computed_hash = hex::encode(Sha256::digest(&object_data));
+        if computed_hash != metadata.hash {
+            return StorageResponse::Error { message: "Object integrity check failed".into() };
+        }
+
+        let mut stats = self.stats.lock();
+        stats.chunks_served += metadata.total_chunks;
+        stats.bytes_served += object_data.len();
+
+        StorageResponse::Object { data: object_data }
     }
 
-    /// Ambil object dari DHT menggunakan erasure decoding.
-    /// Toleransi kehilangan: hingga `parity_shards` shards bisa hilang.
     async fn get_object_erasure(
         &self,
-        metadata: &ObjectMetadata,
+        object_id: &str,
+        metadata: ObjectMetadata,
         key: &[u8; 32],
-        encoder: &ErasureEncoder,
     ) -> StorageResponse {
-        let total = metadata.total_shards;
-        if total == 0 {
-            return StorageResponse::Error {
-                message: "total_shards=0 tapi use_erasure_coding=true (metadata corrupt)".into(),
-            };
-        }
-
-        // Kumpulkan semua shards – None jika shard tidak tersedia (node down/hilang).
-        let mut shards: Vec<Option<Vec<u8>>> = Vec::with_capacity(total);
-        let mut missing = 0usize;
-        for i in 0..total {
-            match self.dht.get_chunk(&metadata.object_id, i).await {
-                Ok(Some(chunk)) => match chunk.decrypt(key) {
-                    Ok(d) => shards.push(Some(d)),
-                    Err(e) => {
-                        log::warn!("[STORAGE] Shard {} decrypt gagal: {}; dianggap missing", i, e);
-                        shards.push(None);
-                        missing += 1;
-                    }
-                },
-                Ok(None) => {
-                    log::debug!("[STORAGE] Shard {} tidak ditemukan di DHT", i);
-                    shards.push(None);
-                    missing += 1;
-                }
-                Err(e) => {
-                    log::warn!("[STORAGE] DHT error untuk shard {}: {}; dianggap missing", i, e);
-                    shards.push(None);
-                    missing += 1;
-                }
-            }
-        }
-
-        if missing > 0 {
-            log::info!(
-                "[STORAGE] Erasure recovery: {} dari {} shards hilang, mencoba rekonstruksi",
-                missing,
-                total
-            );
-        }
-
-        let buffer = match encoder.decode(&mut shards, metadata.original_size) {
-            Ok(d) => d,
-            Err(e) => {
-                return StorageResponse::Error {
-                    message: format!("Erasure decode gagal (terlalu banyak shard hilang?): {}", e),
-                }
-            }
+        let encoder = match &self.erasure_encoder {
+            Some(enc) => enc,
+            None => return StorageResponse::Error { message: "Erasure decoder not configured".into() },
         };
 
-        self.verify_and_return(metadata, buffer)
-    }
+        let mut shards = vec![None; metadata.total_shards];
+        
+        for i in 0..metadata.total_shards {
+            if let Ok(Some(chunk)) = self.dht.get_chunk(object_id, i).await {
+                if let Ok(plain) = chunk.decrypt(key) {
+                    shards[i] = Some(plain);
+                }
+            }
+        }
 
-    /// Verifikasi hash dan kembalikan data, update stats.
-    fn verify_and_return(&self, metadata: &ObjectMetadata, buffer: Vec<u8>) -> StorageResponse {
-        let computed_hash = hex::encode(Sha256::digest(&buffer));
-        if computed_hash != metadata.hash {
-            return StorageResponse::Error {
-                message: format!(
-                    "Hash mismatch: expected={}, got={}",
-                    metadata.hash, computed_hash
-                ),
-            };
+        match encoder.decode(&mut shards, metadata.original_size) {
+            Ok(object_data) => {
+                let computed_hash = hex::encode(Sha256::digest(&object_data));
+                if computed_hash != metadata.hash {
+                    return StorageResponse::Error { message: "Erasure object integrity check failed".into() };
+                }
+
+                let mut stats = self.stats.lock();
+                stats.chunks_served += metadata.total_chunks;
+                stats.bytes_served += object_data.len();
+
+                StorageResponse::Object { data: object_data }
+            }
+            Err(e) => StorageResponse::Error { message: format!("Erasure decoding failed: {}", e) },
         }
-        let len = buffer.len();
-        {
-            let mut stats = self.stats.lock();
-            stats.chunks_served += metadata.total_chunks;
-            stats.bytes_served += len;
-        }
-        // Kembalikan Object (bukan Chunk workaround)
-        StorageResponse::Object { data: buffer }
     }
 }
+
