@@ -23,26 +23,6 @@ pub struct ObjectMetadata {
 }
 
 impl StorageLayer {
-    /// ========== FIX: Persistensi Metadata ke Sled Database ==========
-    async fn save_object_metadata(&self, meta: &ObjectMetadata) {
-        if let Ok(bytes) = bincode::serialize(meta) {
-            let _ = self.metadata_db.insert(meta.object_id.as_bytes(), bytes);
-            let _ = self.metadata_db.flush_async().await;
-        }
-    }
-
-    /// Baca metadata objek dari sled
-    async fn load_object_metadata(&self, object_id: &str) -> Result<ObjectMetadata, String> {
-        match self.metadata_db.get(object_id.as_bytes()) {
-            Ok(Some(bytes)) => {
-                bincode::deserialize(&bytes).map_err(|e| format!("Gagal deserialize metadata: {}", e))
-            }
-            Ok(None) => Err("Metadata not found".to_string()),
-            Err(e) => Err(format!("Gagal membaca DB metadata: {}", e)),
-        }
-    }
-    // ===============================================================
-
     /// Simpan objek besar dengan chunking (biasa atau erasure-coded).
     pub async fn put_object(&self, object_id: &str, data: &[u8]) -> StorageResponse {
         if data.len() > self.config.max_object_size {
@@ -93,7 +73,13 @@ impl StorageLayer {
             use_erasure_coding: false,
         };
 
-        self.save_object_metadata(&metadata).await;
+        // Simpan metadata ke Sled DB menggunakan modul MetadataStore
+        if let Err(e) = self.metadata_store.save_metadata(&metadata).await {
+            return StorageResponse::Error { 
+                message: format!("Metadata persist failed: {}", e) 
+            };
+        }
+
         self.store_chunks(object_id, &chunks).await
     }
 
@@ -133,7 +119,13 @@ impl StorageLayer {
             use_erasure_coding: true,
         };
 
-        self.save_object_metadata(&metadata).await;
+        // Simpan metadata ke Sled DB menggunakan modul MetadataStore
+        if let Err(e) = self.metadata_store.save_metadata(&metadata).await {
+            return StorageResponse::Error { 
+                message: format!("Metadata persist failed: {}", e) 
+            };
+        }
+
         self.store_chunks(object_id, &chunks).await
     }
 
@@ -141,8 +133,8 @@ impl StorageLayer {
     async fn store_chunks(&self, _object_id: &str, chunks: &[Chunk]) -> StorageResponse {
         for chunk in chunks {
             let peers: Vec<libp2p::PeerId> = Vec::new(); // Dikosongkan karena Kademlia akan otomatis mencari nodes terdekat
-            
-            // ========== FIX: Kirim replication_factor ke dht_store ==========
+
+            // Melempar config.replication_factor ke DHT Store agar dikelola oleh Quorum Kademlia
             if let Err(e) = self.dht.put_chunk(chunk.clone(), peers, self.config.replication_factor).await {
                 return StorageResponse::Error {
                     message: format!("Failed to store chunk {}: {}", chunk.chunk_index, e),
@@ -160,9 +152,11 @@ impl StorageLayer {
 
     /// Ambil objek dari DHT.
     pub async fn get_object(&self, object_id: &str) -> StorageResponse {
-        let metadata = match self.load_object_metadata(object_id).await {
-            Ok(m) => m,
-            Err(e) => return StorageResponse::Error { message: e },
+        // Ambil metadata dengan aman lewat MetadataStore
+        let metadata = match self.metadata_store.load_metadata(object_id).await {
+            Ok(Some(m)) => m,
+            Ok(None) => return StorageResponse::Error { message: "Metadata not found in local DB".into() },
+            Err(e) => return StorageResponse::Error { message: format!("Failed to load metadata: {}", e) },
         };
 
         let key = derive_object_key(&self.keystore.master_key(), object_id);
@@ -217,7 +211,7 @@ impl StorageLayer {
         };
 
         let mut shards = vec![None; metadata.total_shards];
-        
+
         for i in 0..metadata.total_shards {
             if let Ok(Some(chunk)) = self.dht.get_chunk(object_id, i).await {
                 if let Ok(plain) = chunk.decrypt(key) {

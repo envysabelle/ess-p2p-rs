@@ -7,6 +7,7 @@ use std::time::Duration;
 use libp2p::PeerId;
 use parking_lot::Mutex;
 use libp2p::kad::{Record, Quorum, RecordKey};
+use std::num::NonZeroUsize; // <-- [BARU] Import NonZeroUsize untuk safety type Kademlia
 use crate::network_controller::NetworkController;
 use super::chunk::Chunk;
 
@@ -24,7 +25,6 @@ impl DhtStore {
         }
     }
 
-    // ========== FIX: Menerima replication_factor dan memaksakan Quorum ==========
     pub async fn put_chunk(&self, chunk: Chunk, _peers: Vec<PeerId>, replication_factor: usize) -> Result<(), String> {
         let key = chunk.chunk_id();
         let value = bincode::serialize(&chunk).map_err(|e| e.to_string())?;
@@ -42,20 +42,16 @@ impl DhtStore {
         let handle = self.controller.swarm_handle();
         let mut guard = handle.lock();
         if let Some(swarm) = guard.as_mut() {
-            // Replikasi: libp2p secara otomatis mencari Node terdekat dengan RecordKey.
-            // Quorum menentukan berapa banyak "sukses menyimpan" yang dibutuhkan.
-            // Jika replication_factor >= 3, kita perintahkan libp2p untuk menunggu sukses dari
-            // Mayoritas peers di k-bucket (menjamin chunk tersebar luas).
-            let quorum = if replication_factor >= 3 {
-                Quorum::Majority 
-            } else {
-                Quorum::One
-            };
+            // Validasi quorum agar minimal 1, menggunakan NonZeroUsize
+            // Ini menjamin libp2p menunggu sukses persis sejumlah replication_factor
+            let quorum = NonZeroUsize::new(replication_factor)
+                .map(Quorum::N)
+                .unwrap_or(Quorum::One);
 
             swarm.behaviour_mut().kademlia
                 .put_record(record, quorum)
                 .map_err(|e| e.to_string())?;
-            
+
             Ok(())
         } else {
             Err("Swarm not available".into())

@@ -13,6 +13,7 @@ pub mod chunk;
 pub mod dht_store;
 pub mod object;
 pub mod erasure;
+pub mod store; // <-- [BARU] Mendaftarkan modul store.rs
 
 use std::sync::Arc;
 use crate::authority::{AuthorityManager, Action};
@@ -22,6 +23,8 @@ use libp2p::PeerId;
 use erasure::{ErasureConfig, ErasureEncoder};
 use dashmap::DashMap;
 use parking_lot::Mutex;
+
+use crate::storage_layer::store::MetadataStore; // <-- [BARU] Import struct MetadataStore
 
 // ============================================================================
 // Config & public structs
@@ -46,7 +49,8 @@ impl Default for StorageLayerConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+// Catatan: Hapus trait `Debug` di bawah ini jika struct MetadataStore lu belum implement/derive Debug.
+#[derive(Debug, Clone)]
 pub struct StorageLayer {
     pub config: StorageLayerConfig,
     pub keystore: SoftwareKeystore,
@@ -55,11 +59,11 @@ pub struct StorageLayer {
     pub cache: Arc<DashMap<String, chunk::Chunk>>,
     pub stats: Arc<Mutex<StorageStats>>,
     pub controller: Arc<NetworkController>,
-    
-    // ========== FIX: Pindah dari HashMap ke Sled Database ==========
-    pub metadata_db: Arc<sled::Db>,
-    // ===============================================================
-    
+
+    // ========== FIX: Pindah dari Sled DB langsung ke struct MetadataStore ==========
+    pub metadata_store: MetadataStore,
+    // ===============================================================================
+
     /// Encoder erasure aktif hanya jika `config.use_erasure_coding == true`.
     pub erasure_encoder: Option<Arc<ErasureEncoder>>,
 }
@@ -100,9 +104,9 @@ impl StorageLayer {
             None
         };
 
-        // Buka database Sled untuk Metadata Persistence
-        let metadata_db = sled::open("data/storage_metadata")
-            .expect("Gagal membuka database untuk Storage Metadata");
+        // Inisialisasi MetadataStore dengan error handling yang aman
+        let metadata_store = MetadataStore::open()
+            .expect("CRITICAL: Failed to initialize persistent metadata store");
 
         Self {
             config,
@@ -112,7 +116,7 @@ impl StorageLayer {
             cache: Arc::new(DashMap::new()),
             stats: Arc::new(Mutex::new(StorageStats::default())),
             controller,
-            metadata_db: Arc::new(metadata_db),
+            metadata_store, // <-- Memasukkan store yang sudah dimodularisasi
             erasure_encoder,
         }
     }
